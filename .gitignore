@@ -1,0 +1,11 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+# 忽略任意层级的构建目录（含 app/build/），而非仅根目录
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties

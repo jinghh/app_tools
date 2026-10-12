@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      技术验证阶段权限策略：
+      - 视频导入使用系统文件选择器（SAF），无需 READ_EXTERNAL_STORAGE
+      - 编码输入/输出均在 App 私有目录，无需 WRITE_EXTERNAL_STORAGE
+      - 导出结果使用 CreateDocument，无需额外权限
+    -->
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MyAppTools">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

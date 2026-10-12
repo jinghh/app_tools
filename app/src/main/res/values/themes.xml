@@ -1,0 +1,7 @@
+<resources>
+    <!-- 仅需一个无 ActionBar 的基础主题；UI 由 Compose Material3 承担 -->
+    <style name="Theme.MyAppTools" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>
