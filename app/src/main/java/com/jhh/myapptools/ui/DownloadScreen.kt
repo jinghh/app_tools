@@ -40,7 +40,11 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * X 视频下载页。
+ * 视频下载页（基于 yt-dlp，支持多站点）。
+ *
+ * 实测支持情况：
+ * - ✅ X（Twitter）、✅ Facebook（公开视频）已真机验证；
+ * - ❌ YouTube 返回 403（反爬指纹或签名挑战需 JS 运行时，属库的免费版/Android 限制）。
  *
  * 能力边界（已核实，见 [com.jhh.myapptools.download.XMediaResolver] 注释）：
  * yt-dlp-android 库不支持下载前获取元信息与直链，故：
@@ -177,9 +181,10 @@ fun DownloadScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("X 视频下载", style = MaterialTheme.typography.headlineSmall)
+        Text("视频下载", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "只处理你有权访问的公开内容；媒体地址有时效性，下载后请尽快处理。",
+            "基于 yt-dlp，支持多种站点（X、Facebook 已实测可用）。" +
+                "只处理你有权访问的公开内容；媒体地址有时效性，下载后请尽快处理。",
             style = MaterialTheme.typography.bodySmall,
         )
 
@@ -188,11 +193,11 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("1. 帖子链接", style = MaterialTheme.typography.titleMedium)
+                Text("1. 视频链接", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("https://x.com/<user>/status/<id>") },
+                    label = { Text("粘贴视频链接（X / Facebook 等）") },
                     singleLine = true,
                     enabled = !running,
                     modifier = Modifier.fillMaxWidth(),
@@ -208,9 +213,9 @@ fun DownloadScreen(
                     ) { Text("取消") }
                 }
                 Text(
-                    "说明：当前解析器（yt-dlp-android）不支持下载前获取清晰度列表，" +
-                        "按默认最优格式下载；时长与分辨率在下载完成后本地读取。" +
-                        "取消为“放弃等待”，后台任务可能仍会跑完。",
+                    "说明：目前不支持下载前获取清晰度列表，按默认最优格式下载；" +
+                        "时长与分辨率在下载完成后本地读取；取消为“放弃等待”，后台任务可能仍会跑完。" +
+                        "YouTube 链接会返回 403（当前解析库限制），X 与 Facebook 已实测可用。",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

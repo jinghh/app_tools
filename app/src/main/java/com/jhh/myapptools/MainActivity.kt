@@ -52,7 +52,7 @@ private fun MainScreen() {
                     selected = tab == TAB_DOWNLOAD,
                     onClick = { tab = TAB_DOWNLOAD },
                     icon = { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null) },
-                    label = { Text("X 下载") },
+                    label = { Text("视频下载") },
                 )
                 NavigationBarItem(
                     selected = tab == TAB_GIF,
