@@ -1,5 +1,7 @@
 *.iml
 .gradle/
+# Kotlin Gradle 插件的构建元数据（会话数据）
+.kotlin/
 /local.properties
 /.idea/
 .DS_Store
