@@ -64,8 +64,6 @@ class YtDlpDownloader(private val context: Context) {
         val request = YtDlpRequest(url)
             .addOption("--no-playlist")
             .addOption("--no-warnings")
-            // 白名单支持：让进度输出按行刷新，便于回调解析
-            .addOption("--newline")
             // 取单文件最佳格式（X 通常为单一 mp4）；避免依赖外部 ffmpeg 做音视频合并
             .addOption("-f", "b")
             .setOutputTemplate(File(outDir, "%(id)s.%(ext)s").absolutePath)
@@ -86,10 +84,11 @@ class YtDlpDownloader(private val context: Context) {
                 return
             }
             if (!response.isSuccess) {
+                val diag = diagnostics()
                 onEvent(
                     DownloadEvent.Failure(
-                        "下载失败（yt-dlp 退出码 ${response.exitCode}）",
-                        diagnostics(),
+                        friendlyMessage(diag, response.exitCode),
+                        diag,
                     )
                 )
                 return
@@ -130,7 +129,49 @@ class YtDlpDownloader(private val context: Context) {
             if (logs.size > 400) logs.removeAt(0)
             logs.add(text)
         }
+        // 同步到 logcat 便于开发期取证；按 PRD 7 过滤认证类敏感信息
+        if (!SENSITIVE_PATTERN.containsMatchIn(text)) {
+            android.util.Log.d("YtDlp", text)
+        }
         onEvent(DownloadEvent.Log(text))
+    }
+
+    /**
+     * 把 yt-dlp 的英文报错翻译成面向用户的中文提示（PRD 3.1：不直接暴露内部报错）。
+     * 依据 yt-dlp 的已知报错文本归类；无匹配时保留退出码与原始信息，不臆测原因。
+     */
+    private fun friendlyMessage(diagnostics: String?, exitCode: Int): String {
+        val text = (diagnostics ?: "").lowercase()
+        return when {
+            "no video could be found" in text ->
+                "该帖子中没有找到视频。可能只有图片/文字，或视频位于被引用的帖子中。"
+
+            "impersonation" in text || "fingerprint" in text ->
+                "该站点要求 TLS 指纹伪装，当前免费版解析库不支持（可考虑换用其他下载方式）。"
+
+            "sign in" in text || "login" in text || "authentication" in text ||
+                "401" in text || "403" in text ->
+                "该内容需要登录或无权访问。本工具不处理需要登录的内容。"
+
+            "404" in text || "not found" in text || "unavailable" in text ||
+                "deleted" in text || "suspended" in text ->
+                "帖子不存在、已被删除或不可访问。"
+
+            "rate limit" in text || "429" in text || "too many requests" in text ->
+                "请求过于频繁（被限流），请稍后再试。"
+
+            "unsupported url" in text ->
+                "不支持的链接格式，请确认是 X 帖子链接。"
+
+            "unable to download webpage" in text || "timed out" in text ||
+                "connection" in text || "network" in text ->
+                "网络异常，请检查网络后重试。"
+
+            "unable to extract" in text || "unable to complete" in text ->
+                "解析该帖子失败，X 的结构可能已变化（yt-dlp 需随库版本更新）。"
+
+            else -> "下载失败（yt-dlp 退出码 $exitCode）。可查看下方诊断信息。"
+        }
     }
 
     /** 失败诊断：优先 ERROR 行，其次日志尾部 */
@@ -138,5 +179,13 @@ class YtDlpDownloader(private val context: Context) {
         if (logs.isEmpty()) return null
         val errors = logs.filter { it.contains("ERROR", ignoreCase = true) }
         (if (errors.isNotEmpty()) errors else logs.takeLast(25)).joinToString("\n")
+    }
+
+    private companion object {
+        /** 认证类敏感关键字：命中则不写入 logcat（PRD 7） */
+        val SENSITIVE_PATTERN = Regex(
+            "cookie|authorization|token=|bearer ",
+            RegexOption.IGNORE_CASE,
+        )
     }
 }

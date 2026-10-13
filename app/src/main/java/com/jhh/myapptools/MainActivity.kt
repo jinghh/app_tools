@@ -40,7 +40,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MainScreen() {
-    var tab by remember { mutableStateOf(0) }
+    // 页签按使用频率排序：X 下载（最常用，默认页）→ 视频转 GIF → GIF 压缩
+    var tab by remember { mutableStateOf(TAB_DOWNLOAD) }
     // 下载模块产出的视频，跨页签直传给转 GIF 模块（避免手动保存再导入）
     var pendingVideo by remember { mutableStateOf<File?>(null) }
 
@@ -48,42 +49,46 @@ private fun MainScreen() {
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
-                    selected = tab == 0,
-                    onClick = { tab = 0 },
+                    selected = tab == TAB_DOWNLOAD,
+                    onClick = { tab = TAB_DOWNLOAD },
+                    icon = { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null) },
+                    label = { Text("X 下载") },
+                )
+                NavigationBarItem(
+                    selected = tab == TAB_GIF,
+                    onClick = { tab = TAB_GIF },
                     icon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
                     label = { Text("视频转 GIF") },
                 )
                 NavigationBarItem(
-                    selected = tab == 1,
-                    onClick = { tab = 1 },
+                    selected = tab == TAB_COMPRESS,
+                    onClick = { tab = TAB_COMPRESS },
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
                     label = { Text("GIF 压缩") },
-                )
-                NavigationBarItem(
-                    selected = tab == 2,
-                    onClick = { tab = 2 },
-                    icon = { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null) },
-                    label = { Text("X 下载") },
                 )
             }
         },
     ) { padding ->
         when (tab) {
-            0 -> GifToolScreen(
+            TAB_DOWNLOAD -> DownloadScreen(
+                modifier = Modifier.padding(padding),
+                onSendToGif = { file ->
+                    pendingVideo = file
+                    tab = TAB_GIF
+                },
+            )
+
+            TAB_GIF -> GifToolScreen(
                 modifier = Modifier.padding(padding),
                 preloadedVideo = pendingVideo,
                 onPreloadConsumed = { pendingVideo = null },
             )
 
-            1 -> GifCompressScreen(Modifier.padding(padding))
-
-            else -> DownloadScreen(
-                modifier = Modifier.padding(padding),
-                onSendToGif = { file ->
-                    pendingVideo = file
-                    tab = 0
-                },
-            )
+            else -> GifCompressScreen(Modifier.padding(padding))
         }
     }
 }
+
+private const val TAB_DOWNLOAD = 0
+private const val TAB_GIF = 1
+private const val TAB_COMPRESS = 2
