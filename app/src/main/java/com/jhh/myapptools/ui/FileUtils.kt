@@ -2,11 +2,26 @@ package com.jhh.myapptools.ui
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import java.io.File
 import java.util.Locale
 
-/** SAF 导入文件的公共处理：复制到私有目录 + 文件名消毒 + 体积格式化 */
+/** SAF 导入、体积与版本号等界面通用工具 */
+
+/** 读取应用版本名（如 0.1.1）；失败时返回"未知"，不抛异常 */
+internal fun appVersionName(context: Context): String = runCatching {
+    val ifo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        context.packageManager.getPackageInfo(
+            context.packageName,
+            android.content.pm.PackageManager.PackageInfoFlags.of(0),
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }
+    ifo.versionName
+}.getOrNull() ?: "未知"
 
 internal fun copyUriToCache(context: Context, uri: Uri, subDir: String, fallbackExt: String): File? {
     val dir = File(context.cacheDir, subDir).apply { mkdirs() }

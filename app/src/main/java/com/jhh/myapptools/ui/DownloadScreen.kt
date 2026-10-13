@@ -1,5 +1,8 @@
 package com.jhh.myapptools.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -25,9 +29,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.download.CookieStore
 import com.jhh.myapptools.download.DownloadEvent
@@ -64,6 +70,7 @@ fun DownloadScreen(
     val scope = rememberCoroutineScope()
     val downloader = remember { YtDlpDownloader(context) }
     val cookieStore = remember { CookieStore(context) }
+    val versionName = remember { appVersionName(context) }
 
     var cookieImported by remember { mutableStateOf(cookieStore.isImported()) }
     var cookieSize by remember { mutableStateOf(cookieStore.sizeBytes()) }
@@ -80,6 +87,14 @@ fun DownloadScreen(
 
     fun appendLog(line: String) {
         logs = (logs + line).takeLast(60)
+    }
+
+    /** 复制文本到剪贴板（Android 13+ 系统会额外提示"已复制"） */
+    fun copyToClipboard(label: String, text: String) {
+        if (text.isBlank()) return
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
     }
 
     // ---------- 登录 Cookie 导入 ----------
@@ -375,7 +390,11 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text("诊断信息（开发用）", style = MaterialTheme.typography.titleMedium)
+                    SectionHeaderWithCopy(
+                        title = "诊断信息（开发用）",
+                        textToCopy = diag,
+                        onCopy = { copyToClipboard("诊断信息", diag) },
+                    )
                     Text(
                         diag.takeLast(4000),
                         style = MaterialTheme.typography.bodySmall,
@@ -391,14 +410,49 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text("yt-dlp 日志", style = MaterialTheme.typography.titleMedium)
+                    val logText = logs.joinToString("\n")
+                    SectionHeaderWithCopy(
+                        title = "yt-dlp 日志",
+                        textToCopy = logText,
+                        onCopy = { copyToClipboard("yt-dlp 日志", logText) },
+                    )
                     Text(
-                        logs.joinToString("\n"),
+                        logText,
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                     )
                 }
             }
+        }
+
+        // 底部版本号，便于反馈问题时确认版本
+        Text(
+            text = "本地工具箱 v$versionName",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp, bottom = 8.dp),
+        )
+    }
+}
+
+/** 卡片标题 + 「复制」按钮（日志/诊断信息用） */
+@Composable
+private fun SectionHeaderWithCopy(
+    title: String,
+    textToCopy: String,
+    onCopy: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = onCopy, enabled = textToCopy.isNotBlank()) {
+            Text("复制")
         }
     }
 }
