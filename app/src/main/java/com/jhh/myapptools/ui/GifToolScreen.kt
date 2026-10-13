@@ -2,6 +2,7 @@ package com.jhh.myapptools.ui
 
 import android.content.Context
 import android.net.Uri
+import android.widget.Toast
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,6 +27,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -57,7 +59,12 @@ import java.util.Locale
  * 引擎结论：纯 Java 编码已实测弃用（慢 29 倍），仅保留 FFmpeg 调色板链路。
  */
 @Composable
-fun GifToolScreen(modifier: Modifier = Modifier) {
+fun GifToolScreen(
+    modifier: Modifier = Modifier,
+    /** 由下载模块直传的视频（已在私有目录，无需再经 SAF 导入） */
+    preloadedVideo: File? = null,
+    onPreloadConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // 引擎实例跨任务复用，内部状态在每次 encode 入口复位（见 GifEngine 接口约定）
@@ -85,6 +92,29 @@ fun GifToolScreen(modifier: Modifier = Modifier) {
 
     fun appendLog(line: String) {
         logs = (logs + line).takeLast(60)
+    }
+
+    // ---------- 接收下载模块直传的视频 ----------
+
+    LaunchedEffect(preloadedVideo) {
+        val file = preloadedVideo ?: return@LaunchedEffect
+        val info = withContext(Dispatchers.IO) { VideoMetadata.read(file) }
+        inputFile = file
+        videoInfo = info
+        result = null
+        errorText = null
+        diagnostics = null
+        if (info != null) {
+            startSec = 0f
+            endSec = if (info.durationMs <= 30_000L) info.durationMs / 1000f else 30f
+            appendLog(
+                "已接收下载的视频：${file.name}（${info.durationMs / 1000}s " +
+                    "${info.width}x${info.height}）"
+            )
+        } else {
+            appendLog("已接收下载的视频，但无法解析元信息：${file.name}")
+        }
+        onPreloadConsumed()
     }
 
     // ---------- SAF 导入 ----------
@@ -140,7 +170,13 @@ fun GifToolScreen(modifier: Modifier = Modifier) {
                         } ?: error("openOutputStream 返回 null")
                     }.isSuccess
                 }
-                appendLog(if (ok) "已保存到：$uri" else "保存失败：$uri")
+                if (ok) {
+                    Toast.makeText(context, "GIF 已保存成功", Toast.LENGTH_SHORT).show()
+                    appendLog("已保存到：$uri")
+                } else {
+                    Toast.makeText(context, "保存失败，请重试", Toast.LENGTH_LONG).show()
+                    appendLog("保存失败：$uri")
+                }
             }
         }
     }

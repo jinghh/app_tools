@@ -3,6 +3,9 @@
 /local.properties
 /.idea/
 .DS_Store
+# AI 助手的工作数据（记忆/会话），非项目源码
+.workbuddy/
+.codebuddy/
 # 忽略任意层级的构建目录（含 app/build/），而非仅根目录
 build/
 /captures

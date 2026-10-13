@@ -1,12 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      技术验证阶段权限策略：
-      - 视频导入使用系统文件选择器（SAF），无需 READ_EXTERNAL_STORAGE
-      - 编码输入/输出均在 App 私有目录，无需 WRITE_EXTERNAL_STORAGE
-      - 导出结果使用 CreateDocument，无需额外权限
+      权限策略：
+      - 视频/GIF 导入导出走系统文件选择器（SAF），无需存储权限
+      - 下载 X 视频需要 INTERNET（yt-dlp-android 的 AAR 也会声明该权限）
+      - media3-exoplayer 会声明 ACCESS_NETWORK_STATE / WAKE_LOCK（普通权限，保留）
     -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      yt-dlp-android 的 AAR 请求 WRITE_EXTERNAL_STORAGE（maxSdkVersion=28）。
+      Android manifest 合并器会因此自动推导出 READ_EXTERNAL_STORAGE，
+      两者都显式剔除；本 App 的导入导出全程使用 SAF，不需要任何存储权限。
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        tools:node="remove" />
 
     <application
         android:allowBackup="true"

@@ -2,6 +2,7 @@ package com.jhh.myapptools.ui
 
 import android.content.Context
 import android.net.Uri
+import android.widget.Toast
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -118,7 +119,13 @@ fun GifCompressScreen(modifier: Modifier = Modifier) {
                         } ?: error("openOutputStream 返回 null")
                     }.isSuccess
                 }
-                appendLog(if (ok) "已保存到：$uri" else "保存失败：$uri")
+                if (ok) {
+                    Toast.makeText(context, "GIF 已保存成功", Toast.LENGTH_SHORT).show()
+                    appendLog("已保存到：$uri")
+                } else {
+                    Toast.makeText(context, "保存失败，请重试", Toast.LENGTH_LONG).show()
+                    appendLog("保存失败：$uri")
+                }
             }
         }
     }
