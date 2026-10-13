@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.download.DownloadEvent
+import com.jhh.myapptools.download.UrlExtractor
 import com.jhh.myapptools.download.YtDlpDownloader
 import com.jhh.myapptools.media.VideoMetadata
 import kotlinx.coroutines.CancellationException
@@ -77,7 +78,8 @@ fun DownloadScreen(
 
     fun startDownload() {
         if (running) return
-        val target = url.trim()
+        // 兜底再抽取一次：确保即使输入框残留多余文字也能正确下载
+        val target = UrlExtractor.extract(url) ?: url.trim()
         if (target.isBlank()) return
 
         running = true
@@ -196,11 +198,24 @@ fun DownloadScreen(
                 Text("1. 视频链接", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     value = url,
-                    onValueChange = { url = it },
-                    label = { Text("粘贴视频链接（X / Facebook 等）") },
+                    onValueChange = { raw ->
+                        val extracted = UrlExtractor.extract(raw)
+                        // 分享文本（如小红书）夹带中文与推广语时，自动只保留链接
+                        if (extracted != null && extracted != raw.trim()) {
+                            url = extracted
+                            Toast.makeText(context, "已自动提取链接", Toast.LENGTH_SHORT).show()
+                        } else {
+                            url = raw
+                        }
+                    },
+                    label = { Text("粘贴链接或分享文本（X / Facebook / 小红书等）") },
                     singleLine = true,
                     enabled = !running,
                     modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "提示：可直接粘贴 App 的分享文本，会自动去掉链接以外的文字。",
+                    style = MaterialTheme.typography.bodySmall,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
