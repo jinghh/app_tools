@@ -43,8 +43,11 @@ class YtDlpDownloader(private val context: Context) {
         YtDlp.init(context) // 内部幂等（initialized 标志）
     }
 
-    /** 下载到应用私有缓存目录 */
-    fun download(url: String, onEvent: (DownloadEvent) -> Unit) {
+    /**
+     * 下载到应用私有缓存目录。
+     * @param cookiePath 可选的 Netscape cookies.txt 路径（用于需要登录态的站点）
+     */
+    fun download(url: String, cookiePath: String?, onEvent: (DownloadEvent) -> Unit) {
         cancelled = false
         logs.clear()
 
@@ -67,6 +70,11 @@ class YtDlpDownloader(private val context: Context) {
             // 取单文件最佳格式（X 通常为单一 mp4）；避免依赖外部 ffmpeg 做音视频合并
             .addOption("-f", "b")
             .setOutputTemplate(File(outDir, "%(id)s.%(ext)s").absolutePath)
+
+        // 需要登录态的站点（小红书、微博等）使用用户自己导入的 Cookie
+        cookiePath?.takeIf { it.isNotBlank() }?.let { path ->
+            request.addOption("--cookies", path)
+        }
 
         try {
             val future = YtDlp.executeDebug(
@@ -102,14 +110,19 @@ class YtDlpDownloader(private val context: Context) {
             }
             onEvent(DownloadEvent.Downloaded(file))
         } catch (e: ExecutionException) {
+            // 失败可能以 Python 异常形式抛出（而非退出码），此处同样走中文映射，
+            // 避免把 yt-dlp 的英文原始报错（常含超长 URL）直接展示给用户
+            val diag = diagnostics()
+            val raw = e.cause?.message ?: e.message.orEmpty()
+            onEvent(DownloadEvent.Failure(friendlyMessage("$raw\n${diag.orEmpty()}", -1), diag))
+        } catch (e: Exception) {
+            val diag = diagnostics()
             onEvent(
                 DownloadEvent.Failure(
-                    "下载异常：${e.cause?.message ?: e.message}",
-                    diagnostics(),
+                    friendlyMessage("${e.message.orEmpty()}\n${diag.orEmpty()}", -1),
+                    diag,
                 )
             )
-        } catch (e: Exception) {
-            onEvent(DownloadEvent.Failure("下载异常：${e.message}", diagnostics()))
         }
     }
 
@@ -147,11 +160,13 @@ class YtDlpDownloader(private val context: Context) {
                 "该帖子中没有找到视频。可能只有图片/文字，或视频位于被引用的帖子中。"
 
             "impersonation" in text || "fingerprint" in text ->
-                "该站点要求 TLS 指纹伪装，当前免费版解析库不支持（可考虑换用其他下载方式）。"
+                "该站点要求 TLS 指纹伪装，当前免费版解析库不支持。"
 
-            "sign in" in text || "login" in text || "authentication" in text ||
-                "401" in text || "403" in text ->
-                "该内容需要登录或无权访问。本工具不处理需要登录的内容。"
+            // 需要登录态的站点（小红书、微博等）常表现为跳转到登录页后报 Unsupported URL
+            "/login" in text || "login" in text || "sign in" in text ||
+                "authentication" in text || "401" in text || "403" in text ->
+                "该内容需要登录才能访问（链接被跳转到了登录页）。" +
+                    "可在本页导入浏览器的 cookies.txt 后重试。"
 
             "404" in text || "not found" in text || "unavailable" in text ||
                 "deleted" in text || "suspended" in text ->
@@ -161,16 +176,17 @@ class YtDlpDownloader(private val context: Context) {
                 "请求过于频繁（被限流），请稍后再试。"
 
             "unsupported url" in text ->
-                "不支持的链接格式，请确认是 X 帖子链接。"
+                "该链接不受支持或已失效，请确认链接可直接打开且包含视频。"
 
             "unable to download webpage" in text || "timed out" in text ||
                 "connection" in text || "network" in text ->
                 "网络异常，请检查网络后重试。"
 
             "unable to extract" in text || "unable to complete" in text ->
-                "解析该帖子失败，X 的结构可能已变化（yt-dlp 需随库版本更新）。"
+                "解析失败，站点结构可能已变化（yt-dlp 需随库版本更新）。"
 
-            else -> "下载失败（yt-dlp 退出码 $exitCode）。可查看下方诊断信息。"
+            // 兜底：不外泄可能含超长 URL 的原始文本，完整内容仅留在诊断信息里
+            else -> "下载失败（yt-dlp 退出码 $exitCode）。详细原因见下方「诊断信息」。"
         }
     }
 

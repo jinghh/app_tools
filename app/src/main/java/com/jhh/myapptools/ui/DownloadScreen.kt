@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.jhh.myapptools.download.CookieStore
 import com.jhh.myapptools.download.DownloadEvent
 import com.jhh.myapptools.download.UrlExtractor
 import com.jhh.myapptools.download.YtDlpDownloader
@@ -45,6 +46,7 @@ import java.io.File
  *
  * 实测支持情况：
  * - ✅ X（Twitter）、✅ Facebook（公开视频）已真机验证；
+ * - ⚠️ 小红书：公开笔记可下载，需登录的笔记会跳转登录页而失败 → 提供 Cookie 导入解决；
  * - ❌ YouTube 返回 403（反爬指纹或签名挑战需 JS 运行时，属库的免费版/Android 限制）。
  *
  * 能力边界（已核实，见 [com.jhh.myapptools.download.XMediaResolver] 注释）：
@@ -61,6 +63,10 @@ fun DownloadScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val downloader = remember { YtDlpDownloader(context) }
+    val cookieStore = remember { CookieStore(context) }
+
+    var cookieImported by remember { mutableStateOf(cookieStore.isImported()) }
+    var cookieSize by remember { mutableStateOf(cookieStore.sizeBytes()) }
 
     var url by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
@@ -74,6 +80,24 @@ fun DownloadScreen(
 
     fun appendLog(line: String) {
         logs = (logs + line).takeLast(60)
+    }
+
+    // ---------- 登录 Cookie 导入 ----------
+
+    val pickCookieLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val error = cookieStore.importFrom(uri)
+        cookieImported = cookieStore.isImported()
+        cookieSize = cookieStore.sizeBytes()
+        if (error == null) {
+            Toast.makeText(context, "Cookie 已导入", Toast.LENGTH_SHORT).show()
+            appendLog("Cookie 已导入（${formatBytes(cookieSize)}）")
+        } else {
+            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+            appendLog("Cookie 导入结果：$error")
+        }
     }
 
     fun startDownload() {
@@ -95,7 +119,8 @@ fun DownloadScreen(
         scope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    downloader.download(target) { events.trySend(it) }
+                    // 已导入 Cookie 时带上，供需要登录态的站点使用
+                    downloader.download(target, cookieStore.pathOrNull()) { events.trySend(it) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -236,13 +261,58 @@ fun DownloadScreen(
             }
         }
 
+        // 2. 登录 Cookie（可选）：小红书、微博等需要登录态的站点
+        Card {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "2. 登录 Cookie（可选）",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    if (cookieImported) {
+                        "状态：已导入（${formatBytes(cookieSize)}）"
+                    } else {
+                        "状态：未导入"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { pickCookieLauncher.launch(arrayOf("*/*")) },
+                        enabled = !running,
+                    ) { Text("导入 cookies.txt") }
+                    if (cookieImported) {
+                        OutlinedButton(
+                            onClick = {
+                                cookieStore.clear()
+                                cookieImported = cookieStore.isImported()
+                                cookieSize = cookieStore.sizeBytes()
+                                Toast.makeText(context, "已清除 Cookie", Toast.LENGTH_SHORT).show()
+                                appendLog("Cookie 已清除")
+                            },
+                            enabled = !running,
+                        ) { Text("清除") }
+                    }
+                }
+                Text(
+                    "用途：小红书、微博等站点需要登录态才能访问（否则会跳转登录页导致失败）。" +
+                        "请用浏览器扩展（如 Get cookies.txt LOCALLY）导出 Netscape 格式的 cookies.txt 后在此导入；" +
+                        "文件仅保存在应用私有目录，不会写入日志或外传。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
         if (running || stage.isNotEmpty()) {
             Card {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("2. 状态", style = MaterialTheme.typography.titleMedium)
+                    Text("3. 状态", style = MaterialTheme.typography.titleMedium)
                     if (running) {
                         LinearProgressIndicator(
                             progress = { progress },
@@ -267,7 +337,7 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("3. 下载结果", style = MaterialTheme.typography.titleMedium)
+                    Text("4. 下载结果", style = MaterialTheme.typography.titleMedium)
                     val meta = downloadedMeta
                     Text(
                         "文件：${file.name}\n" +
