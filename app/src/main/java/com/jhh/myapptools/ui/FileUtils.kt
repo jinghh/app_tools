@@ -5,9 +5,8 @@ import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
 import java.io.File
-import java.util.Locale
 
-/** SAF 导入、体积与版本号等界面通用工具 */
+/** SAF 导入与版本号等界面通用工具（体积格式化见 com.jhh.myapptools.util.formatBytes） */
 
 /** 读取应用版本名（如 0.1.1）；失败时返回"未知"，不抛异常 */
 internal fun appVersionName(context: Context): String = runCatching {
@@ -56,11 +55,4 @@ internal fun queryDisplayName(context: Context, uri: Uri): String? {
         }
     }
     return null
-}
-
-/** 文档 3.3 约定：UI 标注 MB，内部按十进制 MB（1 MB = 1,000,000 bytes）固定换算 */
-internal fun formatBytes(bytes: Long): String = when {
-    bytes < 1000 -> "$bytes B"
-    bytes < 1_000_000 -> String.format(Locale.US, "%.1f KB", bytes / 1000.0)
-    else -> String.format(Locale.US, "%.2f MB", bytes / 1_000_000.0)
 }

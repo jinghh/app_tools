@@ -10,6 +10,16 @@
     -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!--
+      下载必须在**前台服务**里维持进程前台状态。原因：
+      App 退到后台会进入 cached 进程状态，Android 11+ 的 Cached Apps Freezer 会对整个进程
+      SIGSTOP（所有线程停摆、不再读 socket → 下载超时失败），进程也可能被系统直接回收。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ 要求前台服务声明类型并持有对应权限，否则 startForeground 抛 SecurityException -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 13+ 发通知需运行时授权；未授权时服务仍可运行，仅通知不显示 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
       yt-dlp-android 的 AAR 请求 WRITE_EXTERNAL_STORAGE（maxSdkVersion=28）。
       Android manifest 合并器会因此自动推导出 READ_EXTERNAL_STORAGE，
       两者都显式剔除；本 App 的导入导出全程使用 SAF，不需要任何存储权限。
@@ -35,6 +45,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 下载前台服务：把进程保持在前台，避免退到后台被冻结/回收 -->
+        <service
+            android:name=".download.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

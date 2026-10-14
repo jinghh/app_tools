@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.gif.FfmpegGifEngine
+import com.jhh.myapptools.util.formatBytes
 import com.jhh.myapptools.gif.GifEncodeEvent
 import com.jhh.myapptools.gif.GifEncodeParams
 import com.jhh.myapptools.gif.GifEncodeResult

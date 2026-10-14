@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.gif.GifCompressEvent
 import com.jhh.myapptools.gif.GifCompressResult
 import com.jhh.myapptools.gif.GifCompressor
+import com.jhh.myapptools.util.formatBytes
 import com.jhh.myapptools.gif.GifInspector
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers

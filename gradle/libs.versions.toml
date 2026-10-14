@@ -9,6 +9,12 @@ kotlin = "2.3.20"
 composeBom = "2025.10.00"
 activityCompose = "1.13.0"
 coroutines = "1.10.2"
+# androidx.core：NotificationCompat / ServiceCompat / ContextCompat 所需（前台服务与通知）。
+# 版本与构建中已解析的传递依赖版本一致（1.18.0），不引入任何升级风险
+coreKtx = "1.18.0"
+# lifecycle-runtime-compose：界面生命周期感知（从系统设置返回时刷新通知权限状态）。
+# 同样与构建中已解析的传递版本一致（2.9.4）
+lifecycleRuntimeCompose = "2.9.4"
 # Media3 1.11.1：2026-09-10 发布，minSdk 23
 media3 = "1.11.1"
 # FFmpegKit 社区维护分支（dev.ffmpegkit-maintained），仅发布 arm64-v8a / x86_64
@@ -21,6 +27,8 @@ ytdlp = "2.0.2"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }

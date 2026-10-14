@@ -14,8 +14,8 @@ android {
         // minSdk 24 与 ffmpeg-kit / yt-dlp-android 维护分支要求对齐；两者均只发布 64 位 ABI
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
 
         ndk {
             // 只保留 arm64-v8a（近几年真实手机均为此架构）。
@@ -57,6 +57,10 @@ kotlin {
 
 dependencies {
     implementation(libs.androidx.activity.compose)
+    // 前台服务（ServiceCompat）+ 通知（NotificationCompat / NotificationManagerCompat）
+    implementation(libs.androidx.core.ktx)
+    // LifecycleEventEffect：从系统设置返回时刷新通知权限状态
+    implementation(libs.androidx.lifecycle.runtime.compose)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
