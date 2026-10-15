@@ -70,8 +70,9 @@ private fun MainScreen(requestedTab: Int) {
     // 通知点击等外部请求：切到指定页签（不做重建，保留已有界面状态）
     LaunchedEffect(requestedTab) { tab = requestedTab }
 
-    // 下载模块产出的视频，跨页签直传给转 GIF 模块（避免手动保存再导入）
+    // 跨页签直传：下载 → 转 GIF；转 GIF → 压缩（均免去手动保存再导入）
     var pendingVideo by remember { mutableStateOf<File?>(null) }
+    var pendingGif by remember { mutableStateOf<File?>(null) }
 
     Scaffold(
         bottomBar = {
@@ -110,9 +111,17 @@ private fun MainScreen(requestedTab: Int) {
                 modifier = Modifier.padding(padding),
                 preloadedVideo = pendingVideo,
                 onPreloadConsumed = { pendingVideo = null },
+                onSendToCompress = { file ->
+                    pendingGif = file
+                    tab = MainActivity.TAB_COMPRESS
+                },
             )
 
-            else -> GifCompressScreen(Modifier.padding(padding))
+            else -> GifCompressScreen(
+                modifier = Modifier.padding(padding),
+                preloadedGif = pendingGif,
+                onPreloadConsumed = { pendingGif = null },
+            )
         }
     }
 }

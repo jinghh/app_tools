@@ -26,6 +26,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,8 +42,8 @@ import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.gif.GifCompressEvent
 import com.jhh.myapptools.gif.GifCompressResult
 import com.jhh.myapptools.gif.GifCompressor
-import com.jhh.myapptools.util.formatBytes
 import com.jhh.myapptools.gif.GifInspector
+import com.jhh.myapptools.util.formatBytes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -56,7 +57,12 @@ import java.util.Locale
  * 输入已有 GIF 与目标大小，按级联策略压缩，每轮校验真实字节数；未达标明确提示。
  */
 @Composable
-fun GifCompressScreen(modifier: Modifier = Modifier) {
+fun GifCompressScreen(
+    modifier: Modifier = Modifier,
+    /** 由「视频转 GIF」模块直传的产出（已在私有目录，无需再经 SAF 导入） */
+    preloadedGif: File? = null,
+    onPreloadConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val compressor = remember { GifCompressor() }
@@ -76,6 +82,32 @@ fun GifCompressScreen(modifier: Modifier = Modifier) {
 
     fun appendLog(line: String) {
         logs = (logs + line).takeLast(60)
+    }
+
+    // ---------- 接收「视频转 GIF」直传的产出 ----------
+
+    LaunchedEffect(preloadedGif) {
+        val file = preloadedGif ?: return@LaunchedEffect
+        val info = withContext(Dispatchers.IO) { GifInspector.inspect(file) }
+        if (info == null) {
+            errorText = "接收到的文件不是有效的 GIF：${file.name}"
+            appendLog("接收失败：无法解析 GIF 结构（${file.name}）")
+            onPreloadConsumed()
+            return@LaunchedEffect
+        }
+        inputFile = file
+        inputBytes = file.length()
+        inputInfo = info
+        result = null
+        errorText = null
+        appendLog(
+            "已接收转换产出的 GIF：${file.name}（${formatBytes(file.length())}，" +
+                "${info.frameCount} 帧，${info.width}x${info.height}）"
+        )
+        // 目标大小默认 20MB（文档默认值）可能大于刚转出的文件，此时首轮即达标；
+        // 明确提示，避免用户误以为"压缩无效"
+        appendLog("请先确认「目标大小」，再点「开始压缩」")
+        onPreloadConsumed()
     }
 
     val pickGifLauncher = rememberLauncherForActivityResult(

@@ -66,6 +66,8 @@ fun GifToolScreen(
     /** 由下载模块直传的视频（已在私有目录，无需再经 SAF 导入） */
     preloadedVideo: File? = null,
     onPreloadConsumed: () -> Unit = {},
+    /** 把转换结果直传给「GIF 压缩」页（免去手动保存再导入） */
+    onSendToCompress: (File) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -485,6 +487,9 @@ fun GifToolScreen(
                             pendingSave = r
                             saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
                         }) { Text("保存 GIF") }
+                        OutlinedButton(onClick = { onSendToCompress(r.file) }) {
+                            Text("压缩")
+                        }
                     }
                 }
             }
