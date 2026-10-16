@@ -12,10 +12,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import java.io.File
 
-/**
- * Media3 ExoPlayer 视频预览。
- * 技术验证目标：本地视频播放与时间定位能力确认。
- */
+/** Media3 ExoPlayer 视频预览（配合片段起止时间选择）。 */
 @Composable
 fun VideoPreview(
     file: File,

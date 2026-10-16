@@ -289,11 +289,7 @@ fun GifToolScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("视频转 GIF · 技术验证", style = MaterialTheme.typography.headlineSmall)
-        Text(
-            "阶段 0：Media3 预览 + FFmpeg/Java 双引擎实测",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text("视频转 GIF", style = MaterialTheme.typography.headlineSmall)
 
         // 1. 导入视频
         Card {

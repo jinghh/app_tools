@@ -16,10 +16,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -41,11 +43,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.jhh.myapptools.R
 import com.jhh.myapptools.download.CookieStore
 import com.jhh.myapptools.download.DownloadCenter
 import com.jhh.myapptools.download.NotificationPrefs
@@ -61,7 +65,7 @@ import java.io.File
  *
  * 实测支持情况：
  * - ✅ X（Twitter）、✅ Facebook（公开视频）已真机验证；
- * - ⚠️ 小红书：公开笔记可下载，需登录的笔记会跳转登录页而失败 → 提供 Cookie 导入解决；
+ * - ✅ 小红书：公开笔记可直接下载；需登录的笔记导入浏览器 Cookie 后可下载（已端到端验证通过）；
  * - ❌ YouTube 返回 403（反爬指纹或签名挑战需 JS 运行时，属库的免费版/Android 限制）。
  *
  * 能力边界（已核实，见 [com.jhh.myapptools.download.XMediaResolver] 注释）：
@@ -216,19 +220,20 @@ fun DownloadScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("视频下载", style = MaterialTheme.typography.headlineSmall)
-        Text(
-            "基于 yt-dlp，支持多种站点（X、Facebook 已实测可用）。" +
-                "只处理你有权访问的公开内容；媒体地址有时效性，下载后请尽快处理。",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text("视频下载", style = MaterialTheme.typography.headlineSmall)
+            HelpIcon(title = "视频下载", text = HELP_PAGE)
+        }
 
         Card {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("1. 视频链接", style = MaterialTheme.typography.titleMedium)
+                TitleWithHelp("1. 视频链接", "链接与下载说明", HELP_URL)
                 OutlinedTextField(
                     value = url,
                     onValueChange = { raw ->
@@ -257,10 +262,6 @@ fun DownloadScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text(
-                    "提示：可直接粘贴 App 的分享文本，会自动去掉链接以外的文字。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { startDownload() },
@@ -271,13 +272,6 @@ fun DownloadScreen(
                         enabled = running,
                     ) { Text("取消") }
                 }
-                Text(
-                    "说明：目前不支持下载前获取清晰度列表，按默认最优格式下载；" +
-                        "时长与分辨率在下载完成后本地读取；取消为“放弃等待”，后台任务可能仍会跑完。" +
-                        "下载期间可放心切到后台（已用前台服务保活）；完成后是否提醒见下方「通知提醒」。" +
-                        "YouTube 链接会返回 403（当前解析库限制），X 与 Facebook 已实测可用。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
         }
 
@@ -287,10 +281,7 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    "2. 登录 Cookie（可选）",
-                    style = MaterialTheme.typography.titleMedium,
-                )
+                TitleWithHelp("2. 登录 Cookie（可选）", "登录 Cookie 说明", HELP_COOKIE)
                 Text(
                     if (cookieImported) {
                         "状态：已导入（${formatBytes(cookieSize)}）"
@@ -317,12 +308,6 @@ fun DownloadScreen(
                         ) { Text("清除") }
                     }
                 }
-                Text(
-                    "用途：小红书、微博等站点需要登录态才能访问（否则会跳转登录页导致失败）。" +
-                        "请用浏览器扩展（如 Get cookies.txt LOCALLY）导出 Netscape 格式的 cookies.txt 后在此导入；" +
-                        "文件仅保存在应用私有目录，不会写入日志或外传。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
         }
 
@@ -332,7 +317,7 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("3. 通知提醒（可选）", style = MaterialTheme.typography.titleMedium)
+                TitleWithHelp("3. 通知提醒（可选）", "通知提醒说明", HELP_NOTIFY)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -359,13 +344,6 @@ fun DownloadScreen(
                 ) {
                     Text("打开系统通知设置（可开启或完全关闭）")
                 }
-                Text(
-                    "说明：关闭通知不影响下载。下载进行中的进度通知由系统对前台服务强制要求" +
-                        "（正是它保证切后台不被中断），无法单独关闭；" +
-                        "若想完全不显示通知，可在系统设置里关闭本应用的通知权限——" +
-                        "此时下载仍会正常进行。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
         }
 
@@ -485,6 +463,73 @@ fun DownloadScreen(
         )
     }
 }
+
+/**
+ * 「?」帮助图标：点击弹出说明弹窗。
+ *
+ * 说明文案默认**不占版面**（原来 5 段长说明直接铺在页面上，把内容挤得很散），
+ * 需要时点一下图标即可查看全文。
+ */
+@Composable
+private fun HelpIcon(title: String, text: String) {
+    var show by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = { show = true },
+        modifier = Modifier.size(32.dp),
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_help),
+            contentDescription = title,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+    if (show) {
+        AlertDialog(
+            onDismissRequest = { show = false },
+            confirmButton = {
+                TextButton(onClick = { show = false }) { Text("知道了") }
+            },
+            title = { Text(title) },
+            text = { Text(text, style = MaterialTheme.typography.bodyMedium) },
+        )
+    }
+}
+
+/** 卡片标题 + 「?」帮助入口（标题行高度几乎不变，说明收进弹窗） */
+@Composable
+private fun TitleWithHelp(title: String, helpTitle: String, helpText: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        HelpIcon(title = helpTitle, text = helpText)
+    }
+}
+
+// ---------- 说明文案（默认折叠，点「?」查看）----------
+
+private const val HELP_PAGE =
+    "基于 yt-dlp，支持多种站点（X、Facebook 已实测可用）。\n\n" +
+        "只处理你有权访问的公开内容；媒体地址有时效性，下载后请尽快处理。"
+
+private const val HELP_URL =
+    "· 可直接粘贴 App 的分享文本，会自动去掉链接以外的文字。\n\n" +
+        "· 目前不支持下载前获取清晰度列表，按默认最优格式下载；时长与分辨率在下载完成后本地读取。\n\n" +
+        "· 「取消」为放弃等待，后台任务可能仍会跑完。\n\n" +
+        "· 下载期间可放心切到后台（已用前台服务保活）；完成后是否提醒见下方「通知提醒」。\n\n" +
+        "· YouTube 链接会返回 403（当前解析库限制）；X 与 Facebook 已实测可用。"
+
+private const val HELP_COOKIE =
+    "用途：小红书、微博等站点需要登录态才能访问（否则会跳转登录页导致失败）。\n\n" +
+        "用法：请用浏览器扩展（如 Get cookies.txt LOCALLY）导出 Netscape 格式的 cookies.txt 后在此导入。\n\n" +
+        "隐私：文件仅保存在应用私有目录，不会写入日志或外传。"
+
+private const val HELP_NOTIFY =
+    "关闭通知不影响下载。\n\n" +
+        "下载进行中的进度通知由系统对前台服务强制要求（正是它保证切后台不被中断），无法单独关闭。\n\n" +
+        "若想完全不显示通知，可在系统设置里关闭本应用的通知权限——此时下载仍会正常进行。"
 
 /**
  * 通知状态文案：必须分清"App 内偏好"与"系统权限"两层，否则用户会以为开关失灵。
