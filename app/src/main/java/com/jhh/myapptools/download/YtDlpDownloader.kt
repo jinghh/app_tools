@@ -45,9 +45,15 @@ class YtDlpDownloader(private val context: Context) {
 
     /**
      * 下载到应用私有缓存目录。
-     * @param cookiePath 可选的 Netscape cookies.txt 路径（用于需要登录态的站点）
+     * @param cookiePath 按目标站点匹配到的 Netscape cookies.txt 路径（未匹配则 null）
+     * @param proxy      可选代理地址（如 http://10.0.0.2:7890）；null 表示不显式指定
      */
-    fun download(url: String, cookiePath: String?, onEvent: (DownloadEvent) -> Unit) {
+    fun download(
+        url: String,
+        cookiePath: String?,
+        proxy: String?,
+        onEvent: (DownloadEvent) -> Unit,
+    ) {
         cancelled = false
         logs.clear()
 
@@ -74,6 +80,12 @@ class YtDlpDownloader(private val context: Context) {
         // 需要登录态的站点（小红书、微博等）使用用户自己导入的 Cookie
         cookiePath?.takeIf { it.isNotBlank() }?.let { path ->
             request.addOption("--cookies", path)
+        }
+
+        // 内嵌 Python 读不到 Android 的系统代理设置，必须显式传 --proxy
+        // （--proxy 在 yt-dlp 运行器的参数白名单内，已核实）
+        proxy?.takeIf { it.isNotBlank() }?.let { value ->
+            request.addOption("--proxy", value)
         }
 
         try {
@@ -177,6 +189,28 @@ class YtDlpDownloader(private val context: Context) {
 
             "unsupported url" in text ->
                 "该链接不受支持或已失效，请确认链接可直接打开且包含视频。"
+
+            // ---- 网络层错误：属于"到站点的链路没建立起来"，与链接内容无关 ----
+            // Errno 111 = ECONNREFUSED：连接被直接拒绝（代理未启动/端口不对，或链路被阻断）
+            "errno 111" in text || "connection refused" in text ->
+                "连接被拒绝，无法到达该站点。若下载 X 等站点，请确认代理已开启；" +
+                    "若代理不是全局模式，请在上方「网络代理」里填写代理地址。"
+
+            // TLS 握手中途被断开：链路被干扰或代理不稳定
+            "unexpected_eof" in text || "sslerror" in text || "[ssl" in text ||
+                "ssl: " in text || "certificate verify failed" in text ->
+                "网络连接被异常中断（TLS 握手失败）。常见原因是网络链路受干扰或代理不稳定，" +
+                    "请确认代理可用后重试。"
+
+            // 域名解析失败
+            "name or service not known" in text || "nodename nor servname" in text ||
+                "getaddrinfo" in text || "temporary failure in name resolution" in text ->
+                "域名解析失败，请检查网络或代理设置。"
+
+            // Errno 104：连接被重置
+            "errno 104" in text || "connection reset" in text ||
+                "connection aborted" in text || "remote end closed" in text ->
+                "连接被重置（网络链路中断），请确认代理可用后重试。"
 
             "unable to download webpage" in text || "timed out" in text ||
                 "connection" in text || "network" in text ->

@@ -63,9 +63,10 @@ object DownloadCenter {
 
     /**
      * 启动下载。必须在 App 处于前台时调用（Android 12+ 禁止从后台启动前台服务）。
-     * @param cookiePath 可选的 Netscape cookies.txt 路径
+     * @param cookiePath 按目标站点匹配到的 cookies.txt 路径（未匹配/已关闭则为 null）
+     * @param proxy      可选代理地址；null 表示不显式指定
      */
-    fun start(context: Context, url: String, cookiePath: String?) {
+    fun start(context: Context, url: String, cookiePath: String?, proxy: String? = null) {
         if (_state.value.phase == DownloadPhase.RUNNING) return
         if (url.isBlank()) return
 
@@ -77,7 +78,15 @@ object DownloadCenter {
         _state.value = DownloadUiState(
             phase = DownloadPhase.RUNNING,
             stage = "下载中…（首次需初始化 Python 运行时，可能较慢）",
-            logs = listOf("开始下载：$url"),
+            // 明确记录本次实际用了什么凭证/代理，便于出问题时从日志判断
+            logs = buildList {
+                add("开始下载：$url")
+                add(
+                    cookiePath?.let { "Cookie：使用 ${File(it).name.removeSuffix(".txt")}" }
+                        ?: "Cookie：未使用"
+                )
+                proxy?.takeIf { it.isNotBlank() }?.let { add("代理：$it") }
+            },
         )
 
         // 关键一步：先把进程提升为前台服务，避免退到后台被冻结/回收
@@ -89,7 +98,7 @@ object DownloadCenter {
 
         scope.launch {
             try {
-                engine.download(url, cookiePath) { handleEvent(it) }
+                engine.download(url, cookiePath, proxy) { handleEvent(it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

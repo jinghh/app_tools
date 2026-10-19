@@ -24,6 +24,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -72,6 +74,8 @@ fun GifCompressScreen(
     var inputBytes by remember { mutableStateOf(0L) }
 
     var targetMbText by remember { mutableStateOf("20") }
+    /** 有损优先：保持帧率 / 尺寸 / 256 色不变，先降抖动与细节 */
+    var lossyPreferred by remember { mutableStateOf(false) }
 
     var running by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -187,7 +191,7 @@ fun GifCompressScreen(
         scope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    compressor.compress(input, targetBytes) { events.trySend(it) }
+                    compressor.compress(input, targetBytes, lossyPreferred) { events.trySend(it) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -298,6 +302,30 @@ fun GifCompressScreen(
                     singleLine = true,
                     enabled = !running,
                 )
+
+                // 有损优先：先牺牲画质细节，尽量不动帧率/尺寸/色数
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("优先有损压缩", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = if (lossyPreferred) {
+                                "保持帧率/尺寸/256 色，先降抖动与细节；仍超限才减色降帧"
+                            } else {
+                                "关闭时：减色 → 降帧率 → 降尺寸"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = lossyPreferred,
+                        onCheckedChange = { lossyPreferred = it },
+                        enabled = !running,
+                    )
+                }
             }
         }
 

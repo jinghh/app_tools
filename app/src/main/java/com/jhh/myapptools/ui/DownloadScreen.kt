@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.jhh.myapptools.R
 import com.jhh.myapptools.download.CookieStore
 import com.jhh.myapptools.download.DownloadCenter
+import com.jhh.myapptools.download.NetworkPrefs
 import com.jhh.myapptools.download.NotificationPrefs
 import com.jhh.myapptools.download.UrlExtractor
 import com.jhh.myapptools.util.formatBytes
@@ -91,9 +92,16 @@ fun DownloadScreen(
     val state by DownloadCenter.state.collectAsState()
     val running = state.running
 
-    var cookieImported by remember { mutableStateOf(cookieStore.isImported()) }
-    var cookieSize by remember { mutableStateOf(cookieStore.sizeBytes()) }
+    // 按平台保存的 Cookie 列表（导入/清除后刷新）
+    var cookieEntries by remember { mutableStateOf(cookieStore.list()) }
+    var useCookie by remember { mutableStateOf(true) }
     var url by remember { mutableStateOf("") }
+
+    // 当前链接自动匹配到的平台 Cookie（随输入/列表变化重算，避免每帧做文件 IO）
+    val matchedCookie = remember(url, cookieEntries) { cookieStore.matchForUrl(url) }
+
+    val networkPrefs = remember { NetworkPrefs(context) }
+    var proxyText by remember { mutableStateOf(networkPrefs.proxy()) }
 
     /** 复制文本到剪贴板（Android 13+ 系统会额外提示"已复制"） */
     fun copyToClipboard(label: String, text: String) {
@@ -166,15 +174,27 @@ fun DownloadScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val error = cookieStore.importFrom(uri)
-        cookieImported = cookieStore.isImported()
-        cookieSize = cookieStore.sizeBytes()
-        if (error == null) {
-            Toast.makeText(context, "Cookie 已导入", Toast.LENGTH_SHORT).show()
-            DownloadCenter.appendLog("Cookie 已导入（${formatBytes(cookieSize)}）")
-        } else {
-            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-            DownloadCenter.appendLog("Cookie 导入结果：$error")
+        when (val result = cookieStore.importFrom(uri)) {
+            is CookieStore.ImportResult.Success -> {
+                cookieEntries = cookieStore.list()
+                val msg = "已导入 ${result.entry.displayName} Cookie" +
+                    "（${formatBytes(result.entry.sizeBytes)}）"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                DownloadCenter.appendLog(msg)
+            }
+
+            is CookieStore.ImportResult.Warning -> {
+                cookieEntries = cookieStore.list()
+                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                DownloadCenter.appendLog(
+                    "已导入 ${result.entry.displayName}，但${result.message}"
+                )
+            }
+
+            is CookieStore.ImportResult.Failure -> {
+                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                DownloadCenter.appendLog("Cookie 导入失败：${result.message}")
+            }
         }
     }
 
@@ -184,9 +204,19 @@ fun DownloadScreen(
         val target = UrlExtractor.extract(url) ?: url.trim()
         if (target.isBlank()) return
 
+        // 代理填了但格式不对：直接拦下，避免"静默降级为不用代理"再报一个难懂的网络错误
+        if (!NetworkPrefs.isValid(proxyText)) {
+            Toast.makeText(context, "代理地址格式无效，请检查后再下载", Toast.LENGTH_LONG).show()
+            return
+        }
+
         // 仅在用户没关掉提醒时请求权限（关掉后不再打扰）；授权是异步的，不阻塞下载
         if (resultNotify) requestNotificationPermission()
-        DownloadCenter.start(context, target, cookieStore.pathOrNull())
+
+        // 只把**匹配当前站点**的那份 Cookie 交出去；未匹配或开关关闭则不带
+        val cookiePath =
+            if (useCookie) cookieStore.matchForUrl(target)?.file?.absolutePath else null
+        DownloadCenter.start(context, target, cookiePath, networkPrefs.normalizedProxyOrNull())
     }
 
     var pendingSave by remember { mutableStateOf<File?>(null) }
@@ -275,39 +305,105 @@ fun DownloadScreen(
             }
         }
 
-        // 2. 登录 Cookie（可选）：小红书、微博等需要登录态的站点
+        // 2. 登录 Cookie：按平台分别保存，下载时自动匹配，可关闭
         Card {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 TitleWithHelp("2. 登录 Cookie（可选）", "登录 Cookie 说明", HELP_COOKIE)
-                Text(
-                    if (cookieImported) {
-                        "状态：已导入（${formatBytes(cookieSize)}）"
-                    } else {
-                        "状态：未导入"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { pickCookieLauncher.launch(arrayOf("*/*")) },
-                        enabled = !running,
-                    ) { Text("导入 cookies.txt") }
-                    if (cookieImported) {
-                        OutlinedButton(
-                            onClick = {
-                                cookieStore.clear()
-                                cookieImported = cookieStore.isImported()
-                                cookieSize = cookieStore.sizeBytes()
-                                Toast.makeText(context, "已清除 Cookie", Toast.LENGTH_SHORT).show()
-                                DownloadCenter.appendLog("Cookie 已清除")
-                            },
-                            enabled = !running,
-                        ) { Text("清除") }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("下载时携带 Cookie", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = cookieMatchText(
+                                useCookie = useCookie,
+                                hasUrl = url.isNotBlank(),
+                                matched = matchedCookie,
+                                entries = cookieEntries,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = useCookie, onCheckedChange = { useCookie = it })
+                }
+
+                // 已导入的平台，可单独清除（导入一次即长期保留）
+                if (cookieEntries.isEmpty()) {
+                    Text("尚未导入", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    cookieEntries.forEach { entry ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                entry.displayName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                formatBytes(entry.sizeBytes),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(
+                                onClick = {
+                                    cookieStore.clear(entry.platform)
+                                    cookieEntries = cookieStore.list()
+                                    DownloadCenter.appendLog("已清除 ${entry.displayName} Cookie")
+                                },
+                                enabled = !running,
+                            ) { Text("清除") }
+                        }
                     }
                 }
+
+                OutlinedButton(
+                    onClick = { pickCookieLauncher.launch(arrayOf("*/*")) },
+                    enabled = !running,
+                ) { Text("导入 cookies.txt（自动识别平台）") }
+            }
+        }
+
+        // 3. 网络代理：内嵌 Python 读不到 Android 系统代理，需要显式指定
+        Card {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TitleWithHelp("3. 网络代理（可选）", "网络代理说明", HELP_PROXY)
+                OutlinedTextField(
+                    value = proxyText,
+                    onValueChange = {
+                        proxyText = it
+                        networkPrefs.setProxy(it)
+                    },
+                    label = { Text("如 http://192.168.1.2:7890") },
+                    singleLine = true,
+                    enabled = !running,
+                    isError = !NetworkPrefs.isValid(proxyText),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = when {
+                        proxyText.isBlank() -> "留空：使用系统默认（VPN 全局模式可留空）"
+                        NetworkPrefs.isValid(proxyText) ->
+                            "已启用：${NetworkPrefs.normalize(proxyText)}"
+                        else -> "格式无效，示例：http://192.168.1.2:7890 或 socks5://127.0.0.1:1080"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (NetworkPrefs.isValid(proxyText)) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
             }
         }
 
@@ -317,7 +413,7 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TitleWithHelp("3. 通知提醒（可选）", "通知提醒说明", HELP_NOTIFY)
+                TitleWithHelp("4. 通知提醒（可选）", "通知提醒说明", HELP_NOTIFY)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -353,7 +449,7 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("4. 状态", style = MaterialTheme.typography.titleMedium)
+                    Text("5. 状态", style = MaterialTheme.typography.titleMedium)
                     if (running) {
                         LinearProgressIndicator(
                             progress = { state.fraction },
@@ -378,7 +474,7 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("5. 下载结果", style = MaterialTheme.typography.titleMedium)
+                    Text("6. 下载结果", style = MaterialTheme.typography.titleMedium)
                     val meta = state.meta
                     Text(
                         "文件：${file.name}\n" +
@@ -523,13 +619,43 @@ private const val HELP_URL =
 
 private const val HELP_COOKIE =
     "用途：小红书、微博等站点需要登录态才能访问（否则会跳转登录页导致失败）。\n\n" +
-        "用法：请用浏览器扩展（如 Get cookies.txt LOCALLY）导出 Netscape 格式的 cookies.txt 后在此导入。\n\n" +
-        "隐私：文件仅保存在应用私有目录，不会写入日志或外传。"
+        "用法：用浏览器扩展（如 Get cookies.txt LOCALLY）导出 Netscape 格式的 cookies.txt 后在此导入。" +
+        "本 App 会从文件内容自动识别站点，**按平台分别保存**，导入一次即可长期使用。\n\n" +
+        "下载时只发送与当前链接**同站点**的那份 Cookie：下 X 视频不会带上小红书 Cookie，" +
+        "反之亦然；也可以用上方开关整体关闭。\n\n" +
+        "隐私：文件仅保存在应用私有目录，不写入日志、不外传；用完可在列表里单独清除。"
 
 private const val HELP_NOTIFY =
     "关闭通知不影响下载。\n\n" +
         "下载进行中的进度通知由系统对前台服务强制要求（正是它保证切后台不被中断），无法单独关闭。\n\n" +
         "若想完全不显示通知，可在系统设置里关闭本应用的通知权限——此时下载仍会正常进行。"
+
+private const val HELP_PROXY =
+    "为什么需要单独填：yt-dlp 运行在**内嵌 Python** 里，它只从环境变量读代理，" +
+        "**不读 Android 系统的 Wi-Fi 代理设置**——所以只在 Wi-Fi 里配代理，对下载是无效的。\n\n" +
+        "两条可行路线：\n" +
+        "· 用 VPN 类应用（全局接管流量）→ 这里留空即可；\n" +
+        "· 用局域网代理（如电脑上的 7890 端口）→ 在这里填地址，会作为 --proxy 传给 yt-dlp。\n\n" +
+        "支持 http://主机:端口、socks5://主机:端口；只填 主机:端口 会自动补 http://。留空 = 不使用代理。"
+
+/**
+ * Cookie 匹配状态文案。
+ *
+ * 必须让用户清楚"这一次到底会不会带 Cookie、带的是哪个平台的"——
+ * 因为 cookie 现在按平台分开存，自动匹配；匹配不到就不带（不会退而求其次拿别的站点的）。
+ */
+private fun cookieMatchText(
+    useCookie: Boolean,
+    hasUrl: Boolean,
+    matched: CookieStore.Entry?,
+    entries: List<CookieStore.Entry>,
+): String = when {
+    !useCookie -> if (entries.isEmpty()) "已关闭（未导入 Cookie）" else "已关闭，本次不带 Cookie"
+    entries.isEmpty() -> "未导入任何 Cookie"
+    matched != null -> "本次将使用：${matched.displayName}（${formatBytes(matched.sizeBytes)}）"
+    hasUrl -> "本站点未匹配到 Cookie，本次不带"
+    else -> "输入链接后自动匹配站点"
+}
 
 /**
  * 通知状态文案：必须分清"App 内偏好"与"系统权限"两层，否则用户会以为开关失灵。
