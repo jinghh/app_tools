@@ -55,6 +55,7 @@ import com.jhh.myapptools.download.DownloadCenter
 import com.jhh.myapptools.download.NetworkPrefs
 import com.jhh.myapptools.download.NotificationPrefs
 import com.jhh.myapptools.download.UrlExtractor
+import com.jhh.myapptools.download.YtDlpDownloader
 import com.jhh.myapptools.util.formatBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -136,9 +137,11 @@ fun DownloadScreen(
         }
     }
 
-    // 从系统设置返回时同步真实权限状态（用户可能刚在设置里改过）
+    // 从系统设置返回时同步真实权限状态（用户可能刚在设置里改过）；
+    // 顺带刷新断点残留大小（覆盖"进程被杀后重启"也能看到可续传内容的情况）
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         permissionGranted = notifyPrefs.isSystemPermissionGranted()
+        DownloadCenter.refreshResumable(context)
     }
 
     /** 请求系统通知权限；系统已不再弹窗时（被永久拒绝）需到系统设置里手动开启 */
@@ -198,10 +201,11 @@ fun DownloadScreen(
         }
     }
 
-    fun startDownload() {
+    /** 下载的实际入口：resume=false 先清掉上次的半成品；resume=true 保留 .part 接着下 */
+    fun launchDownload(resume: Boolean, fixedUrl: String? = null) {
         if (running) return
         // 兜底再抽取一次：确保即使输入框残留多余文字也能正确下载
-        val target = UrlExtractor.extract(url) ?: url.trim()
+        val target = fixedUrl ?: (UrlExtractor.extract(url) ?: url.trim())
         if (target.isBlank()) return
 
         // 代理填了但格式不对：直接拦下，避免"静默降级为不用代理"再报一个难懂的网络错误
@@ -216,7 +220,30 @@ fun DownloadScreen(
         // 只把**匹配当前站点**的那份 Cookie 交出去；未匹配或开关关闭则不带
         val cookiePath =
             if (useCookie) cookieStore.matchForUrl(target)?.file?.absolutePath else null
-        DownloadCenter.start(context, target, cookiePath, networkPrefs.normalizedProxyOrNull())
+        DownloadCenter.start(
+            context,
+            target,
+            cookiePath,
+            networkPrefs.normalizedProxyOrNull(),
+            resume,
+        )
+    }
+
+    /** 重新填写链接后点下载：清掉上次的半成品，从头下 */
+    fun startDownload() = launchDownload(resume = false)
+
+    /**
+     * 续传：用**上次尝试的那个 URL**（而不是输入框当前内容）继续下载，
+     * 避免用户中途改过链接、拿旧 .part 去续新视频。
+     */
+    fun resumeDownload() {
+        if (running) return
+        val target = YtDlpDownloader.resumeUrl(context)
+        if (target.isNullOrBlank()) {
+            Toast.makeText(context, "没有可续传的下载记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        launchDownload(resume = true, fixedUrl = target)
     }
 
     var pendingSave by remember { mutableStateOf<File?>(null) }
@@ -464,6 +491,13 @@ fun DownloadScreen(
                         },
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    // 中断后续传：失败/取消会保留 .part，点这里接着上次的进度下。
+                    // 若要重下，用上面的「开始下载」——它会先清掉半成品。
+                    if (!running && state.resumableBytes > 0L) {
+                        OutlinedButton(onClick = { resumeDownload() }) {
+                            Text("继续下载（已下载 ${formatBytes(state.resumableBytes)}）")
+                        }
+                    }
                 }
             }
         }

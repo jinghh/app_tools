@@ -27,6 +27,8 @@ data class DownloadUiState(
     val error: String? = null,
     val diagnostics: String? = null,
     val logs: List<String> = emptyList(),
+    /** 中断残留的半成品大小（>0 时可「继续下载」） */
+    val resumableBytes: Long = 0L,
 ) {
     val running: Boolean get() = phase == DownloadPhase.RUNNING
 }
@@ -65,8 +67,15 @@ object DownloadCenter {
      * 启动下载。必须在 App 处于前台时调用（Android 12+ 禁止从后台启动前台服务）。
      * @param cookiePath 按目标站点匹配到的 cookies.txt 路径（未匹配/已关闭则为 null）
      * @param proxy      可选代理地址；null 表示不显式指定
+     * @param resume     true = 续传（保留上次的 .part 接着下）；false = 重新下载（先清掉残留）
      */
-    fun start(context: Context, url: String, cookiePath: String?, proxy: String? = null) {
+    fun start(
+        context: Context,
+        url: String,
+        cookiePath: String?,
+        proxy: String? = null,
+        resume: Boolean = false,
+    ) {
         if (_state.value.phase == DownloadPhase.RUNNING) return
         if (url.isBlank()) return
 
@@ -80,7 +89,7 @@ object DownloadCenter {
             stage = "下载中…（首次需初始化 Python 运行时，可能较慢）",
             // 明确记录本次实际用了什么凭证/代理，便于出问题时从日志判断
             logs = buildList {
-                add("开始下载：$url")
+                add(if (resume) "继续下载（续传）：$url" else "开始下载：$url")
                 add(
                     cookiePath?.let { "Cookie：使用 ${File(it).name.removeSuffix(".txt")}" }
                         ?: "Cookie：未使用"
@@ -98,7 +107,7 @@ object DownloadCenter {
 
         scope.launch {
             try {
-                engine.download(url, cookiePath, proxy) { handleEvent(it) }
+                engine.download(url, cookiePath, proxy, resume) { handleEvent(it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -111,6 +120,12 @@ object DownloadCenter {
                 )
             }
 
+            // 本次尝试结束：同步"还剩多少没下完"。
+            // 失败/取消时 .part 会留下，供「继续下载」使用；成功时 yt-dlp 已把 .part
+            // 重命名为成品，这里自然归零。
+            val partial = YtDlpDownloader.partialBytes(appContext)
+            _state.update { it.copy(resumableBytes = partial) }
+
             // yt-dlp 无法在下载前提供元信息（参数白名单限制），只能下载完成后本地读取
             val file = _state.value.file
             if (_state.value.phase == DownloadPhase.SUCCESS && file != null) {
@@ -118,12 +133,24 @@ object DownloadCenter {
                 _state.update { it.copy(meta = meta) }
             }
         }
-    }
+        }
 
-    /** 取消：标记放弃 + 尝试取消 Future（内嵌 Python 不会被真正中断，库无取消 API） */
-    fun cancel() {
+        /** 取消：标记放弃 + 尝试取消 Future（内嵌 Python 不会被真正中断，库无取消 API） */
+        fun cancel() {
         downloader?.cancel()
-    }
+        }
+
+        /**
+        * 重新读取断点残留大小。界面在 ON_RESUME 时调用，
+        * 覆盖"进程被杀后重启"也能看到可续传残留的场景。
+        */
+        fun refreshResumable(context: Context) {
+        val appContext = context.applicationContext
+        scope.launch {
+            val bytes = YtDlpDownloader.partialBytes(appContext)
+            _state.update { it.copy(resumableBytes = bytes) }
+        }
+        }
 
     /**
      * 界面侧补充日志（Cookie 导入、保存结果等）。

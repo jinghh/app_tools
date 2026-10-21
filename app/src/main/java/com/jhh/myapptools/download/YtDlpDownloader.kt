@@ -12,9 +12,11 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.Future
 
 /**
- * 由 yt-dlp 自身完成下载的**兜底实现**：
- * 当解析出的最佳格式是分片流（m3u8 等，无法用单一 HTTP GET 取回）时使用。
- * 常规单文件直链（mp4）走 [HttpDownloader]，那里具备真正的取消能力。
+ * yt-dlp 下载实现 —— **当前 App 里唯一的下载路径**。
+ *
+ * （历史说明：早期文档曾写"常规单文件直链走独立的 HttpDownloader、yt-dlp 只作兜底"，
+ * 但该方案未落地，实际解析与下载都由本类承担。相关设想保留在 PRD 中，
+ * 待自研解析器 + OkHttp 直链下载实现后再拆分。）
  *
  * 已核实的库限制（来自 2.0.2 源码/字节码，非猜测）：
  * 1. [dev.ffmpegkit_maintained.ytdlp.YtDlpResponse] 的 output/errorOutput 在库内部
@@ -52,14 +54,25 @@ class YtDlpDownloader(private val context: Context) {
         url: String,
         cookiePath: String?,
         proxy: String?,
+        resume: Boolean = false,
         onEvent: (DownloadEvent) -> Unit,
     ) {
         cancelled = false
         logs.clear()
 
-        val outDir = File(context.cacheDir, "ytdlp-downloads").apply { mkdirs() }
-        // 清空旧产物，便于用“最新文件”识别本次结果
-        outDir.listFiles()?.forEach { runCatching { it.delete() } }
+        val outDir = outDir(context)
+        val resumeMarker = File(context.filesDir, RESUME_URL_FILE)
+
+        if (resume && partialBytes(context) > 0L) {
+            // 续传：**保留 .part**。yt-dlp 默认就是断点续传（写 .part + HTTP Range），
+            // 只要不删掉它，重跑同一 URL 就会从已有字节接着下。
+            // （--continue 不在库的参数白名单内，无法显式传，靠的就是这个默认行为）
+        } else {
+            // 重新填写链接后点击下载：清掉上一次的半成品。
+            // 否则旧残留可能被当成本次结果挑走，.part 也会越积越多。
+            clear(context)
+        }
+        runCatching { resumeMarker.writeText(url) }
 
         try {
             onEvent(DownloadEvent.Stage("初始化 Python 运行时…"))
@@ -114,12 +127,15 @@ class YtDlpDownloader(private val context: Context) {
                 return
             }
             val file = outDir.listFiles()
-                ?.filter { it.isFile && it.length() > 0L }
+                // .part 是没写完的半成品，绝不能当成本次结果挑走
+                ?.filter { it.isFile && it.length() > 0L && !it.name.endsWith(PART_SUFFIX) }
                 ?.maxByOrNull { it.lastModified() }
             if (file == null) {
                 onEvent(DownloadEvent.Failure("下载完成但未找到输出文件", diagnostics()))
                 return
             }
+            // 成功：.part 已被 yt-dlp 重命名为成品，续传标记随之失效
+            runCatching { File(context.filesDir, RESUME_URL_FILE).delete() }
             onEvent(DownloadEvent.Downloaded(file))
         } catch (e: ExecutionException) {
             // 失败可能以 Python 异常形式抛出（而非退出码），此处同样走中文映射，
@@ -231,11 +247,49 @@ class YtDlpDownloader(private val context: Context) {
         (if (errors.isNotEmpty()) errors else logs.takeLast(25)).joinToString("\n")
     }
 
-    private companion object {
+    companion object {
+        const val OUT_DIR_NAME = "ytdlp-downloads"
+
         /** 认证类敏感关键字：命中则不写入 logcat（PRD 7） */
         val SENSITIVE_PATTERN = Regex(
             "cookie|authorization|token=|bearer ",
             RegexOption.IGNORE_CASE,
         )
+
+        /** yt-dlp 未写完的半成品后缀；续传的依据就是它 */
+        private const val PART_SUFFIX = ".part"
+
+        /**
+         * 记录"上次下载尝试的 URL"，供「继续下载」使用。
+         * 放在 filesDir 而不是输出目录：避免与"用最新文件识别结果"的逻辑互相干扰。
+         */
+        private const val RESUME_URL_FILE = "ytdlp-resume-url.txt"
+
+        fun outDir(context: Context): File =
+            File(context.cacheDir, OUT_DIR_NAME).apply { mkdirs() }
+
+        /**
+         * 可续传的半成品大小（.part 合计字节）。
+         * > 0 表示有中断残留，可以「继续下载」；下载成功后 yt-dlp 会把 .part
+         * 重命名为成品，此时自然归零。
+         */
+        fun partialBytes(context: Context): Long =
+            outDir(context).listFiles()
+                ?.filter { it.isFile && it.name.endsWith(PART_SUFFIX) }
+                ?.sumOf { it.length() }
+                ?: 0L
+
+        /** 上次下载尝试的 URL；没有记录时返回 null */
+        fun resumeUrl(context: Context): String? =
+            File(context.filesDir, RESUME_URL_FILE)
+                .takeIf { it.isFile }
+                ?.readText()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+
+        /** 清空下载产物（含半成品） */
+        fun clear(context: Context) {
+            outDir(context).listFiles()?.forEach { runCatching { it.delete() } }
+        }
     }
 }
