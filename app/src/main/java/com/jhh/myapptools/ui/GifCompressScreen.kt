@@ -2,6 +2,7 @@ package com.jhh.myapptools.ui
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -163,6 +164,25 @@ fun GifCompressScreen(
                     Toast.makeText(context, "保存失败，请重试", Toast.LENGTH_LONG).show()
                     appendLog("保存失败：$uri")
                 }
+            }
+        }
+    }
+
+    /**
+     * 一键保存到系统「下载」目录（MediaStore，API 29+ 免权限）；
+     * SAF 保留为「另存为」入口（P2-6）。
+     */
+    fun quickSaveToDownloads(file: File) {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                saveToPublicDownloads(context, file, mimeForFile(file))
+            } != null
+            if (ok) {
+                Toast.makeText(context, "已保存到系统下载目录", Toast.LENGTH_SHORT).show()
+                appendLog("已保存到系统下载目录：${file.name}")
+            } else {
+                Toast.makeText(context, "保存失败，可改用「另存为…」选择位置", Toast.LENGTH_LONG).show()
+                appendLog("保存到下载目录失败：${file.name}")
             }
         }
     }
@@ -400,10 +420,21 @@ fun GifCompressScreen(
                             .clip(RoundedCornerShape(8.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                     )
-                    Button(onClick = {
-                        pendingSave = r
-                        saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
-                    }) { Text("保存 GIF") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            // 一键保存到系统「下载」目录（免权限）；SAF 保留为「另存为」（P2-6）
+                            Button(onClick = { quickSaveToDownloads(r.file) }) { Text("保存 GIF") }
+                            OutlinedButton(onClick = {
+                                pendingSave = r
+                                saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
+                            }) { Text("另存为…") }
+                        } else {
+                            Button(onClick = {
+                                pendingSave = r
+                                saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
+                            }) { Text("保存 GIF") }
+                        }
+                    }
                 }
             }
         }

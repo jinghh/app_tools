@@ -46,8 +46,9 @@ data class DownloadUiState(
  * 前台服务能让进程保持"不被冻结、不被回收"；状态放在进程级单例里，
  * 则界面重建/切后台再回来仍能看到进度与结果。
  *
- * 未处理（当前实现的固有限制，非本类缺陷）：进程若被系统杀死，状态不持久化、也无法续传
- * —— 因为 yt-dlp 这条路径本身没有断点续传能力。
+ * 进程若被系统**杀死**：内存状态不持久化（重启后回到空闲），但 `.part` 半成品与
+ * 续传 URL 均已落盘（v0.1.5），且 [DownloadService] 以 `START_STICKY` 重启后会用
+ * 记录的 URL **自动续传**（见 [resumeAfterRestart]）。
  */
 object DownloadCenter {
 
@@ -64,7 +65,8 @@ object DownloadCenter {
     private const val MAX_LOGS = 60
 
     /**
-     * 启动下载。必须在 App 处于前台时调用（Android 12+ 禁止从后台启动前台服务）。
+     * 启动下载（用户点「开始下载 / 继续下载」）。必须在 App 处于前台时调用
+     * （Android 12+ 禁止从后台启动前台服务），本方法会同时把前台服务拉起来。
      * @param cookiePath 按目标站点匹配到的 cookies.txt 路径（未匹配/已关闭则为 null）
      * @param proxy      可选代理地址；null 表示不显式指定
      * @param resume     true = 续传（保留上次的 .part 接着下）；false = 重新下载（先清掉残留）
@@ -75,6 +77,23 @@ object DownloadCenter {
         cookiePath: String?,
         proxy: String? = null,
         resume: Boolean = false,
+    ) = begin(context, url, cookiePath, proxy, resume, promoteService = true)
+
+    /**
+     * 进程被系统杀死后，由重启的 [DownloadService] 调用：用持久化的续传 URL 自动恢复下载。
+     * 服务本身已在前台，**不得**再次调用 startForegroundService（Android 12+ 的后台启动限制），
+     * 故走 promoteService = false。
+     */
+    fun resumeAfterRestart(context: Context, url: String, cookiePath: String?, proxy: String?) =
+        begin(context, url, cookiePath, proxy, resume = true, promoteService = false)
+
+    private fun begin(
+        context: Context,
+        url: String,
+        cookiePath: String?,
+        proxy: String?,
+        resume: Boolean,
+        promoteService: Boolean,
     ) {
         if (_state.value.phase == DownloadPhase.RUNNING) return
         if (url.isBlank()) return
@@ -98,11 +117,17 @@ object DownloadCenter {
             },
         )
 
-        // 关键一步：先把进程提升为前台服务，避免退到后台被冻结/回收
-        val serviceOk = runCatching { DownloadService.start(appContext) }.isSuccess
-        if (!serviceOk) {
-            // 不阻断下载，但必须如实告知用户降级后的风险，不静默
-            appendLog("警告：前台服务启动失败（系统限制），退到后台可能被中断")
+        // 关键一步：先把进程提升为前台服务，避免退到后台被冻结/回收。
+        // 进程重启的自动续传不在此列——服务本身就在前台，重复 startForegroundService
+        // 反而会撞上 Android 12+ 的后台启动限制。
+        if (promoteService) {
+            val serviceOk = runCatching { DownloadService.start(appContext) }.isSuccess
+            if (!serviceOk) {
+                // 不阻断下载，但必须如实告知用户降级后的风险，不静默
+                appendLog("警告：前台服务启动失败（系统限制），退到后台可能被中断")
+            }
+        } else {
+            appendLog("检测到未完成的下载，进程重启后已自动恢复（续传）")
         }
 
         scope.launch {
@@ -133,24 +158,24 @@ object DownloadCenter {
                 _state.update { it.copy(meta = meta) }
             }
         }
-        }
+    }
 
-        /** 取消：标记放弃 + 尝试取消 Future（内嵌 Python 不会被真正中断，库无取消 API） */
-        fun cancel() {
+    /** 取消：标记放弃 + 尝试取消 Future（内嵌 Python 不会被真正中断，库无取消 API） */
+    fun cancel() {
         downloader?.cancel()
-        }
+    }
 
-        /**
-        * 重新读取断点残留大小。界面在 ON_RESUME 时调用，
-        * 覆盖"进程被杀后重启"也能看到可续传残留的场景。
-        */
-        fun refreshResumable(context: Context) {
+    /**
+     * 重新读取断点残留大小。界面在 ON_RESUME 时调用，
+     * 覆盖"进程被杀后重启"也能看到可续传残留的场景。
+     */
+    fun refreshResumable(context: Context) {
         val appContext = context.applicationContext
         scope.launch {
             val bytes = YtDlpDownloader.partialBytes(appContext)
             _state.update { it.copy(resumableBytes = bytes) }
         }
-        }
+    }
 
     /**
      * 界面侧补充日志（Cookie 导入、保存结果等）。

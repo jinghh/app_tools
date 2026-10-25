@@ -32,17 +32,29 @@
         tools:node="remove" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyAppTools">
+        <!--
+          allowBackup=false：CookieStore 承诺登录 Cookie「仅保存在应用私有目录，不外传」，
+          而系统云备份 / adb backup 会把它们带离设备（PRD 7 隐私要求）。
+          本 App 无值得备份的用户数据（偏好丢了重设即可），整体关闭最稳妥。
+        -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- 分享直达：浏览器 / 微信里「分享文本」直接进下载页并自动提取链接 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 

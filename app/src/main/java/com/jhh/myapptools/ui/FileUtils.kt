@@ -1,12 +1,16 @@
 package com.jhh.myapptools.ui
 
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import java.io.File
+import java.util.Locale
 
-/** SAF 导入与版本号等界面通用工具（体积格式化见 com.jhh.myapptools.util.formatBytes） */
+/** SAF 导入导出、MediaStore 保存与版本号等界面通用工具（体积格式化见 util/Format.kt） */
 
 /** 读取应用版本名（如 0.1.1）；失败时返回"未知"，不抛异常 */
 internal fun appVersionName(context: Context): String = runCatching {
@@ -55,4 +59,47 @@ internal fun queryDisplayName(context: Context, uri: Uri): String? {
         }
     }
     return null
+}
+
+/**
+ * 一键保存到系统「下载」目录（MediaStore.Downloads）。
+ * API 29+ 起 App 自己创建的媒体**无需任何存储权限**；SAF（CreateDocument）保留为「另存为」。
+ * 成功返回写入的 Uri；失败（存储不可用/重名冲突等）返回 null，由调用方回退提示。
+ * 阻塞 IO，调用方须在 Dispatchers.IO 上执行。
+ */
+internal fun saveToPublicDownloads(context: Context, file: File, mime: String): Uri? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+    return runCatching {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: error("MediaStore 插入失败")
+        try {
+            resolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { it.copyTo(out) }
+            } ?: error("openOutputStream 返回 null")
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            uri
+        } catch (e: Exception) {
+            // 写入失败：清掉 pending 记录，不在 Downloads 里留 0 字节占位
+            runCatching { resolver.delete(uri, null, null) }
+            throw e
+        }
+    }.getOrNull()
+}
+
+/** MediaStore 需要的 MIME 类型；未知扩展名按通用二进制处理（仅影响系统归类，不影响内容） */
+internal fun mimeForFile(file: File): String = when (file.extension.lowercase(Locale.US)) {
+    "mp4", "mov", "m4v" -> "video/mp4"
+    "webm" -> "video/webm"
+    "mkv" -> "video/x-matroska"
+    "gif" -> "image/gif"
+    else -> "application/octet-stream"
 }

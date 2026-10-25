@@ -2,6 +2,7 @@ package com.jhh.myapptools.ui
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -43,6 +44,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.gif.FfmpegGifEngine
+import com.jhh.myapptools.gif.GifToolPrefs
 import com.jhh.myapptools.util.formatBytes
 import com.jhh.myapptools.gif.GifEncodeEvent
 import com.jhh.myapptools.gif.GifEncodeParams
@@ -77,13 +79,18 @@ fun GifToolScreen(
     var inputFile by remember { mutableStateOf<File?>(null) }
     var videoInfo by remember { mutableStateOf<VideoMetadata.Info?>(null) }
 
+    // 参数记忆（P2-11）：从上次使用的值恢复；任何调整立即写回
+    val gifPrefs = remember { GifToolPrefs(context) }
     var startSec by remember { mutableFloatStateOf(0f) }
     var endSec by remember { mutableFloatStateOf(0f) }
 
-    var fps by remember { mutableIntStateOf(12) }
-    var width by remember { mutableIntStateOf(480) }
-    var maxColors by remember { mutableIntStateOf(256) }
-    var dither by remember { mutableStateOf(true) }
+    var fps by remember { mutableIntStateOf(gifPrefs.fps()) }
+    var width by remember { mutableIntStateOf(gifPrefs.width()) }
+    var maxColors by remember { mutableIntStateOf(gifPrefs.maxColors()) }
+    var dither by remember { mutableStateOf(gifPrefs.dither()) }
+
+    /** 把当前四项参数写入记忆（与预设/微调共用，保证「最后使用值」总是最新的） */
+    fun persistParams() = gifPrefs.save(fps, width, maxColors, dither)
 
     var running by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -186,6 +193,25 @@ fun GifToolScreen(
     }
 
     // ---------- 编码执行 ----------
+
+    /**
+     * 一键保存到系统「下载」目录（MediaStore，API 29+ 免权限）；
+     * SAF 保留为「另存为」入口（P2-6）。
+     */
+    fun quickSaveToDownloads(file: File) {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                saveToPublicDownloads(context, file, mimeForFile(file))
+            } != null
+            if (ok) {
+                Toast.makeText(context, "已保存到系统下载目录", Toast.LENGTH_SHORT).show()
+                appendLog("已保存到系统下载目录：${file.name}")
+            } else {
+                Toast.makeText(context, "保存失败，可改用「另存为…」选择位置", Toast.LENGTH_LONG).show()
+                appendLog("保存到下载目录失败：${file.name}")
+            }
+        }
+    }
 
     fun startEncode() {
         val input = inputFile ?: return
@@ -386,32 +412,62 @@ fun GifToolScreen(
             ) {
                 Text("4. 编码参数", style = MaterialTheme.typography.titleMedium)
 
+                // 画质预设（P2-12）：一键写入四项参数（随之被参数记忆保存），之后仍可单独微调
+                Text("画质预设", style = MaterialTheme.typography.bodyMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        "小体积" to GifPreset(8, 360, 64, dither = false),
+                        "平衡" to GifPreset(12, 480, 128, dither = true),
+                        "高画质" to GifPreset(15, 640, 256, dither = true),
+                    ).forEach { (label, preset) ->
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                fps = preset.fps
+                                width = preset.width
+                                maxColors = preset.maxColors
+                                dither = preset.dither
+                                persistParams()
+                            },
+                            enabled = !running,
+                            label = { Text(label) },
+                        )
+                    }
+                }
+
                 ChipRow(
                     label = "帧率 FPS",
                     options = listOf(6, 8, 10, 12, 15, 20),
                     current = fps,
                     enabled = !running,
-                ) { fps = it }
+                ) { fps = it; persistParams() }
 
                 ChipRow(
                     label = "输出宽度 px（保持宽高比，不放大）",
                     options = listOf(240, 320, 360, 480, 640),
                     current = width,
                     enabled = !running,
-                ) { width = it }
+                ) { width = it; persistParams() }
 
                 ChipRow(
                     label = "调色板颜色数（压缩模块将按此级联降参）",
                     options = listOf(256, 128, 64, 32),
                     current = maxColors,
                     enabled = !running,
-                ) { maxColors = it }
+                ) { maxColors = it; persistParams() }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text("Bayer 抖动", style = MaterialTheme.typography.bodyMedium)
-                    Switch(checked = dither, onCheckedChange = { dither = it }, enabled = !running)
+                    Switch(
+                        checked = dither,
+                        onCheckedChange = { dither = it; persistParams() },
+                        enabled = !running,
+                    )
                 }
             }
         }
@@ -479,10 +535,19 @@ fun GifToolScreen(
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            pendingSave = r
-                            saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
-                        }) { Text("保存 GIF") }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            // 一键保存到系统「下载」目录（免权限）；SAF 保留为「另存为」（P2-6）
+                            Button(onClick = { quickSaveToDownloads(r.file) }) { Text("保存 GIF") }
+                            OutlinedButton(onClick = {
+                                pendingSave = r
+                                saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
+                            }) { Text("另存为…") }
+                        } else {
+                            Button(onClick = {
+                                pendingSave = r
+                                saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
+                            }) { Text("保存 GIF") }
+                        }
                         OutlinedButton(onClick = { onSendToCompress(r.file) }) {
                             Text("压缩")
                         }
@@ -567,3 +632,6 @@ private fun ChipRow(
 
 private fun copyVideoToCache(context: Context, uri: Uri): File? =
     copyUriToCache(context, uri, subDir = "video-input", fallbackExt = "mp4")
+
+/** 画质预设（P2-12）：一键写入的参数组合；写入后仍可单独微调 */
+private data class GifPreset(val fps: Int, val width: Int, val maxColors: Int, val dither: Boolean)

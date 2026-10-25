@@ -21,6 +21,9 @@ import java.net.URI
  */
 internal class CookieStore(private val context: Context) {
 
+    /** 「下载时携带 Cookie」开关的持久化（代理/通知开关均已持久化，唯独它此前没有） */
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
     /** 一个已导入的平台 */
     data class Entry(
         /** 归一化注册域，如 xiaohongshu.com */
@@ -45,6 +48,13 @@ internal class CookieStore(private val context: Context) {
 
     init {
         migrateLegacySingleFile()
+    }
+
+    /** 界面「下载时携带 Cookie」开关；实际是否带 Cookie 仍按平台自动匹配 */
+    fun isUseCookieEnabled(): Boolean = prefs.getBoolean(KEY_USE_COOKIE, true)
+
+    fun setUseCookieEnabled(value: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_COOKIE, value).apply()
     }
 
     /** 已导入的平台，按展示名排序 */
@@ -151,6 +161,8 @@ internal class CookieStore(private val context: Context) {
         const val COOKIE_DIR = "cookies"
         const val LEGACY_FILE = "cookies.txt"
         const val HTTP_ONLY_PREFIX = "#HttpOnly_"
+        const val PREFS_NAME = "cookie_prefs"
+        const val KEY_USE_COOKIE = "use_cookie"
 
         /** 双段公共后缀，取注册域时需多保留一级 */
         val MULTI_PART_SUFFIXES = setOf(

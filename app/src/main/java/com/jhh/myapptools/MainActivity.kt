@@ -27,6 +27,7 @@ import com.jhh.myapptools.ui.DownloadScreen
 import com.jhh.myapptools.ui.GifCompressScreen
 import com.jhh.myapptools.ui.GifToolScreen
 import com.jhh.myapptools.ui.theme.AppTheme
+import com.jhh.myapptools.download.UrlExtractor
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -34,26 +35,41 @@ class MainActivity : ComponentActivity() {
     /** 通知点击等外部入口请求的页签；变化时 Compose 会切过去 */
     private var requestedTab by mutableIntStateOf(TAB_DOWNLOAD)
 
+    /** 分享直达（ACTION_SEND）提取出的链接；下载页填充后置空 */
+    private var pendingShareUrl by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedTab = intent.readTabExtra()
+        pendingShareUrl = intent.sharedUrl()
         enableEdgeToEdge()
         setContent {
             AppTheme {
-                MainScreen(requestedTab = requestedTab)
+                MainScreen(
+                    requestedTab = requestedTab,
+                    sharedUrl = pendingShareUrl,
+                    onSharedUrlConsumed = { pendingShareUrl = null },
+                )
             }
         }
     }
 
-    /** 点击下载结果通知时，Activity 已在栈顶 → 走这里切页签，不重建界面 */
+    /** 点击通知/外部分享进入时，Activity 已在栈顶 → 走这里切页签，不重建界面 */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         requestedTab = intent.readTabExtra()
+        intent.sharedUrl()?.let { pendingShareUrl = it }
     }
 
     private fun Intent?.readTabExtra(): Int =
         this?.getIntExtra(EXTRA_TAB, TAB_DOWNLOAD) ?: TAB_DOWNLOAD
+
+    /** 分享文本里的第一条链接；不是 ACTION_SEND 或没有链接则返回 null */
+    private fun Intent?.sharedUrl(): String? =
+        this?.takeIf { it.action == Intent.ACTION_SEND }
+            ?.getStringExtra(Intent.EXTRA_TEXT)
+            ?.let { UrlExtractor.extract(it) }
 
     companion object {
         const val EXTRA_TAB = "extra_tab"
@@ -65,7 +81,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun MainScreen(requestedTab: Int) {
+private fun MainScreen(
+    requestedTab: Int,
+    sharedUrl: String?,
+    onSharedUrlConsumed: () -> Unit,
+) {
     var tab by remember { mutableIntStateOf(requestedTab) }
     // 通知点击等外部请求：切到指定页签（不做重建，保留已有界面状态）
     LaunchedEffect(requestedTab) { tab = requestedTab }
@@ -101,6 +121,8 @@ private fun MainScreen(requestedTab: Int) {
         when (tab) {
             MainActivity.TAB_DOWNLOAD -> DownloadScreen(
                 modifier = Modifier.padding(padding),
+                prefilledUrl = sharedUrl,
+                onPrefillConsumed = onSharedUrlConsumed,
                 onSendToGif = { file ->
                     pendingVideo = file
                     tab = MainActivity.TAB_GIF

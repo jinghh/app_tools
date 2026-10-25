@@ -46,7 +46,7 @@ class YtDlpDownloader(private val context: Context) {
     }
 
     /**
-     * 下载到应用私有缓存目录。
+     * 下载到应用私有缓存目录（成品成功后转移到 [Companion.finalDir]）。
      * @param cookiePath 按目标站点匹配到的 Netscape cookies.txt 路径（未匹配则 null）
      * @param proxy      可选代理地址（如 http://10.0.0.2:7890）；null 表示不显式指定
      */
@@ -88,7 +88,8 @@ class YtDlpDownloader(private val context: Context) {
             .addOption("--no-warnings")
             // 取单文件最佳格式（X 通常为单一 mp4）；避免依赖外部 ffmpeg 做音视频合并
             .addOption("-f", "b")
-            .setOutputTemplate(File(outDir, "%(id)s.%(ext)s").absolutePath)
+            // 文件名用视频标题（截 80 字符，缺标题回退 id；yt-dlp 会自动消毒非法字符）
+            .setOutputTemplate(File(outDir, OUTPUT_TEMPLATE).absolutePath)
 
         // 需要登录态的站点（小红书、微博等）使用用户自己导入的 Cookie
         cookiePath?.takeIf { it.isNotBlank() }?.let { path ->
@@ -101,7 +102,68 @@ class YtDlpDownloader(private val context: Context) {
             request.addOption("--proxy", value)
         }
 
-        try {
+        // 链路类失败（连接被拒/重置/超时/DNS/TLS）自动用同一 URL 续传重试——
+        // .part 已保留，重试只下载剩余字节；限流/登录/链接本身的问题不重试。
+        var attempt = 0
+        while (true) {
+            when (val terminal = runOnce(request, onEvent)) {
+                is DownloadEvent.Downloaded -> {
+                    // 成功：.part 已被 yt-dlp 重命名为成品，续传标记随之失效；
+                    // 成品移出 cacheDir（不受系统「清理缓存」影响），失败则留在原位
+                    runCatching { resumeMarker.delete() }
+                    val moved = runCatching { moveToFinalDir(terminal.file, context) }.getOrNull()
+                    if (moved != null && moved != terminal.file) {
+                        onEvent(DownloadEvent.Log("成品已移至长期目录：${moved.name}"))
+                    }
+                    onEvent(DownloadEvent.Downloaded(moved ?: terminal.file))
+                    return
+                }
+
+                is DownloadEvent.Failure -> {
+                    attempt++
+                    if (attempt <= MAX_AUTO_RETRIES && isTransientNetworkError(terminal)) {
+                        onEvent(
+                            DownloadEvent.Stage(
+                                "网络异常，${RETRY_DELAY_MS / 1000} 秒后自动重试" +
+                                    "（第 $attempt/$MAX_AUTO_RETRIES 次）…"
+                            )
+                        )
+                        android.util.Log.w(
+                            "YtDlp",
+                            "transient failure, auto-retry $attempt: " +
+                                (terminal.diagnostics?.lineSequence()?.lastOrNull()?.take(300) ?: ""),
+                        )
+                        // 分片休眠，让「取消」能及时生效（跑在 IO 线程，阻塞无妨）
+                        var waited = 0L
+                        while (waited < RETRY_DELAY_MS && !cancelled) {
+                            Thread.sleep(100)
+                            waited += 100
+                        }
+                        if (cancelled) {
+                            onEvent(DownloadEvent.Cancelled)
+                            return
+                        }
+                        onEvent(DownloadEvent.Stage("下载中…（自动重试）"))
+                        continue
+                    }
+                    onEvent(terminal)
+                    return
+                }
+
+                else -> {
+                    onEvent(terminal)
+                    return
+                }
+            }
+        }
+    }
+
+    /**
+     * 执行一次下载尝试。**不发射**终态事件，把它返回给调用方——
+     * 这样调用方（[download]）可以先判断是否值得自动重试，再决定是否把失败呈现给用户。
+     */
+    private fun runOnce(request: YtDlpRequest, onEvent: (DownloadEvent) -> Unit): DownloadEvent {
+        return try {
             val future = YtDlp.executeDebug(
                 request,
                 LogCallback { _, message -> collect(message, onEvent) },
@@ -112,46 +174,37 @@ class YtDlpDownloader(private val context: Context) {
             currentFuture = future
             val response = future.get()
 
-            if (cancelled) {
-                onEvent(DownloadEvent.Cancelled)
-                return
-            }
+            if (cancelled) return DownloadEvent.Cancelled
             if (!response.isSuccess) {
                 val diag = diagnostics()
-                onEvent(
-                    DownloadEvent.Failure(
-                        friendlyMessage(diag, response.exitCode),
-                        diag,
-                    )
-                )
-                return
+                return DownloadEvent.Failure(friendlyMessage(diag, response.exitCode), diag)
             }
-            val file = outDir.listFiles()
+            val file = outDir(context).listFiles()
                 // .part 是没写完的半成品，绝不能当成本次结果挑走
                 ?.filter { it.isFile && it.length() > 0L && !it.name.endsWith(PART_SUFFIX) }
                 ?.maxByOrNull { it.lastModified() }
             if (file == null) {
-                onEvent(DownloadEvent.Failure("下载完成但未找到输出文件", diagnostics()))
-                return
+                DownloadEvent.Failure("下载完成但未找到输出文件", diagnostics())
+            } else {
+                DownloadEvent.Downloaded(file)
             }
-            // 成功：.part 已被 yt-dlp 重命名为成品，续传标记随之失效
-            runCatching { File(context.filesDir, RESUME_URL_FILE).delete() }
-            onEvent(DownloadEvent.Downloaded(file))
         } catch (e: ExecutionException) {
-            // 失败可能以 Python 异常形式抛出（而非退出码），此处同样走中文映射，
-            // 避免把 yt-dlp 的英文原始报错（常含超长 URL）直接展示给用户
-            val diag = diagnostics()
-            val raw = e.cause?.message ?: e.message.orEmpty()
-            onEvent(DownloadEvent.Failure(friendlyMessage("$raw\n${diag.orEmpty()}", -1), diag))
+            // 失败可能以 Python 异常形式抛出（而非退出码），同样走中文映射；
+            // 原始报错并入诊断信息（PRD 7：只进「诊断信息」面板，不进用户提示）
+            failureWithRaw(e.cause?.message ?: e.message.orEmpty())
         } catch (e: Exception) {
-            val diag = diagnostics()
-            onEvent(
-                DownloadEvent.Failure(
-                    friendlyMessage("${e.message.orEmpty()}\n${diag.orEmpty()}", -1),
-                    diag,
-                )
-            )
+            failureWithRaw(e.message.orEmpty())
         }
+    }
+
+    /** 异常路径的失败事件：友好提示 + 原始文本并入诊断信息（供自动重试判断与排查） */
+    private fun failureWithRaw(raw: String): DownloadEvent.Failure {
+        val diag = diagnostics()
+        val merged = listOf(raw.trim(), diag.orEmpty().trim())
+            .filter { it.isNotEmpty() }
+            .joinToString("\n")
+            .ifEmpty { null }
+        return DownloadEvent.Failure(friendlyMessage("$raw\n${diag.orEmpty()}", -1), merged)
     }
 
     /**
@@ -240,6 +293,12 @@ class YtDlpDownloader(private val context: Context) {
         }
     }
 
+    /** 链路类（瞬态）网络错误：值得用 .part 续传自动重试；限流/登录/链接问题不在此列 */
+    private fun isTransientNetworkError(failure: DownloadEvent.Failure): Boolean {
+        val text = "${failure.message}\n${failure.diagnostics.orEmpty()}"
+        return TRANSIENT_NETWORK_PATTERN.containsMatchIn(text)
+    }
+
     /** 失败诊断：优先 ERROR 行，其次日志尾部 */
     private fun diagnostics(): String? = synchronized(logs) {
         if (logs.isEmpty()) return null
@@ -249,6 +308,28 @@ class YtDlpDownloader(private val context: Context) {
 
     companion object {
         const val OUT_DIR_NAME = "ytdlp-downloads"
+
+        /** 成品长期目录名（位于外部应用专属目录下，见 [finalDir]） */
+        private const val FINAL_DIR_NAME = "downloads"
+
+        /**
+         * 输出文件名模板：标题优先、缺标题回退 id（yt-dlp 的 `,` 备选语法，已对照官方文档），
+         * `.80s` 在括号外对最终结果截断 80 字符。非法字符由 yt-dlp 自动消毒。
+         */
+        private const val OUTPUT_TEMPLATE = "%(title,id).80s.%(ext)s"
+
+        /** 链路类瞬态错误（与 friendlyMessage 的网络层分组一致）：自动重试只针对这一组 */
+        private val TRANSIENT_NETWORK_PATTERN = Regex(
+            "errno 111|connection refused|unexpected_eof|sslerror|\\[ssl|ssl: |" +
+                "certificate verify failed|name or service not known|nodename nor servname|" +
+                "getaddrinfo|temporary failure in name resolution|errno 104|connection reset|" +
+                "connection aborted|remote end closed|timed out|unable to download webpage",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** 自动重试上限与间隔：仅链路类失败，用 .part 续传接着下 */
+        private const val MAX_AUTO_RETRIES = 2
+        private const val RETRY_DELAY_MS = 3_000L
 
         /** 认证类敏感关键字：命中则不写入 logcat（PRD 7） */
         val SENSITIVE_PATTERN = Regex(
@@ -269,6 +350,32 @@ class YtDlpDownloader(private val context: Context) {
             File(context.cacheDir, OUT_DIR_NAME).apply { mkdirs() }
 
         /**
+         * 成品目录：外部应用专属存储（`Android/data/<pkg>/files/downloads`），
+         * **不受系统「清理缓存」影响**——cacheDir 在磁盘紧张时会被整体清空，
+         * 用户还没「保存到本地」的视频会无声丢失。外部存储不可用时退回内部 `filesDir`。
+         * `.part` 半成品仍留在 [outDir]（丢了可重下，不必占长期空间）。
+         */
+        fun finalDir(context: Context): File {
+            val ext = context.getExternalFilesDir(null)?.let { File(it, FINAL_DIR_NAME) }
+            return (ext ?: File(context.filesDir, FINAL_DIR_NAME)).apply { mkdirs() }
+        }
+
+        /**
+         * 把成品从 [outDir] 转移到 [finalDir]。两处可能不在同一卷（rename 失败），退回复制；
+         * 抛异常时调用方应退回使用原文件，不影响本次结果。
+         */
+        fun moveToFinalDir(file: File, context: Context): File {
+            val target = File(finalDir(context), file.name)
+            if (file.canonicalFile == target.canonicalFile) return file
+            runCatching { target.delete() }
+            if (file.renameTo(target) && target.length() > 0L) return target
+            file.copyTo(target, overwrite = true)
+            check(target.length() > 0L) { "复制到成品目录失败：${target.absolutePath}" }
+            runCatching { file.delete() }
+            return target
+        }
+
+        /**
          * 可续传的半成品大小（.part 合计字节）。
          * > 0 表示有中断残留，可以「继续下载」；下载成功后 yt-dlp 会把 .part
          * 重命名为成品，此时自然归零。
@@ -287,7 +394,7 @@ class YtDlpDownloader(private val context: Context) {
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
 
-        /** 清空下载产物（含半成品） */
+        /** 清空下载产物（含半成品）；成品长期目录 [finalDir] 不在此列，由存储清理管理 */
         fun clear(context: Context) {
             outDir(context).listFiles()?.forEach { runCatching { it.delete() } }
         }

@@ -26,12 +26,15 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * 下载前台服务：**唯一职责是把进程保持在前台状态**，使下载在 App 退到后台时
+ * 下载前台服务：把进程保持在前台状态，使下载在 App 退到后台时
  * 不被 Cached Apps Freezer 冻结、也不被系统回收（原因详见 [DownloadCenter] 注释）。
  *
- * 它不做下载本身（下载跑在 [DownloadCenter] 的进程级作用域里），只做两件事：
+ * 它不做下载本身（下载跑在 [DownloadCenter] 的进程级作用域里），只做三件事：
  * 1. 显示/更新进度通知（前台服务必须有可见通知）；
- * 2. 下载结束时把进度通知换成一条**结果通知**（完成 / 失败），供用户切出 App 后也能知道结果。
+ * 2. 下载结束时把进度通知换成一条**结果通知**（完成 / 失败），供用户切出 App 后也能知道结果；
+ * 3. 进程被系统杀死后以 `START_STICKY` 重启时，检测到可续传残留则**自动续传**
+ *    —— v0.1.5 的断点续传让"重启有意义"（此前 `START_NOT_STICKY` 的前提已不成立），
+ *    恢复入口见 [DownloadCenter.resumeAfterRestart]。
  *
  * 通知分两个渠道：
  * - [CHANNEL_PROGRESS] 低优先级、静音、常驻（进度用）；
@@ -52,12 +55,32 @@ class DownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            // 系统重启（START_STICKY）：进程被杀后服务重建，检查是否有可续传的下载。
+            // 用持久化的 URL + 按站点匹配的 Cookie/已保存的代理自动续传，无需用户干预。
+            val url = YtDlpDownloader.resumeUrl(this)
+            val hasPart = YtDlpDownloader.partialBytes(this) > 0L
+            if (DownloadCenter.state.value.phase == DownloadPhase.IDLE && url != null && hasPart) {
+                val cookiePath = CookieStore(this).matchForUrl(url)?.file?.absolutePath
+                DownloadCenter.resumeAfterRestart(
+                    this,
+                    url,
+                    cookiePath,
+                    NetworkPrefs(this).normalizedProxyOrNull(),
+                )
+            } else if (DownloadCenter.state.value.phase == DownloadPhase.IDLE) {
+                // 重启后没有可恢复的工作：安静退出，不留一个空的前台通知。
+                // 必须 START_NOT_STICKY，否则会陷入"重启→退出→再重启"的循环。
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        }
         // startForegroundService 之后必须在 5 秒内调用 startForeground，否则 ANR/崩溃。
-        // 这里用当前状态先占位，随后由收集器持续更新。
-        // （DownloadCenter 保证调用本服务前状态已置为 RUNNING，不会一创建就自我停止）
+        // 这里用当前状态先占位（自动续传时已是 RUNNING），随后由收集器持续更新。
         promoteToForeground(DownloadCenter.state.value)
-        // 进程被杀后不自动重启：当前 yt-dlp 路径无法续传，重启无意义
-        return START_NOT_STICKY
+        // 进程被杀后由系统重启：有 .part + 续传 URL 就能接着下，重启是有意义的
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -71,11 +94,17 @@ class DownloadService : Service() {
      * 去重规则：**进度每次都更新**（否则通知会停在初始进度）；**终态只在阶段真正变化时
      * 处理一次**（下载成功后 DownloadCenter 还会补一次元信息更新，会产生第二次 SUCCESS
      * 发射，不去重会重复弹出「下载完成」通知）。
+     *
+     * [sawRunning] 守护：进程重启的服务实例在 [DownloadCenter.resumeAfterRestart] 生效前
+     * 会先看到初始 IDLE——那是"还没开始"，不能当成"下载结束"而退出服务；
+     * 只有真正跑过一次下载（见过 RUNNING）后的终态/空闲才触发退出。
      */
     private fun observeDownloadState() {
         scope.launch {
             var lastPhase: DownloadPhase? = null
+            var sawRunning = false
             DownloadCenter.state.collect { state ->
+                if (state.phase == DownloadPhase.RUNNING) sawRunning = true
                 val phaseChanged = state.phase != lastPhase
                 lastPhase = state.phase
                 when (state.phase) {
@@ -86,7 +115,7 @@ class DownloadService : Service() {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         notifyResult(
                             title = "下载完成",
-                            text = state.file?.name ?: "视频已保存到应用缓存",
+                            text = state.file?.name ?: "视频已保存",
                             success = true,
                         )
                         stopSelf()
@@ -103,7 +132,7 @@ class DownloadService : Service() {
                     }
 
                     // 取消 / 空闲：安静退出，不打扰用户（App 内已有状态提示）
-                    DownloadPhase.CANCELLED, DownloadPhase.IDLE -> if (phaseChanged) {
+                    DownloadPhase.CANCELLED, DownloadPhase.IDLE -> if (phaseChanged && sawRunning) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                     }

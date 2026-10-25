@@ -34,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +47,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -82,6 +84,9 @@ import java.io.File
 @Composable
 fun DownloadScreen(
     modifier: Modifier = Modifier,
+    /** 分享直达（ACTION_SEND）提取出的链接；填入输入框后由回调置空（见 MainActivity） */
+    prefilledUrl: String? = null,
+    onPrefillConsumed: () -> Unit = {},
     onSendToGif: (File) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -95,8 +100,14 @@ fun DownloadScreen(
 
     // 按平台保存的 Cookie 列表（导入/清除后刷新）
     var cookieEntries by remember { mutableStateOf(cookieStore.list()) }
-    var useCookie by remember { mutableStateOf(true) }
+    // 开关持久化（P2-11）：与代理/通知开关一致，下次进来恢复上次选择
+    var useCookie by remember { mutableStateOf(cookieStore.isUseCookieEnabled()) }
     var url by remember { mutableStateOf("") }
+
+    // 剪贴板检测（P2-4）：进入页面时若剪贴板有链接，给「一键填充」；
+    // 忽略过的链接本次会话内不再打扰，同一链接填过也不重复提示
+    var clipSuggestion by remember { mutableStateOf<String?>(null) }
+    var dismissedClipUrl by remember { mutableStateOf<String?>(null) }
 
     // 当前链接自动匹配到的平台 Cookie（随输入/列表变化重算，避免每帧做文件 IO）
     val matchedCookie = remember(url, cookieEntries) { cookieStore.matchForUrl(url) }
@@ -138,10 +149,21 @@ fun DownloadScreen(
     }
 
     // 从系统设置返回时同步真实权限状态（用户可能刚在设置里改过）；
-    // 顺带刷新断点残留大小（覆盖"进程被杀后重启"也能看到可续传内容的情况）
+    // 顺带刷新断点残留大小（覆盖"进程被杀后重启"也能看到可续传内容的情况），
+    // 并做剪贴板检测（App 拿到焦点时系统才允许读取）
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         permissionGranted = notifyPrefs.isSystemPermissionGranted()
         DownloadCenter.refreshResumable(context)
+        val extracted = readClipboardText(context)?.let { UrlExtractor.extract(it) }
+        clipSuggestion = extracted?.takeIf { it != url.trim() && it != dismissedClipUrl }
+    }
+
+    // 分享直达（P2-5）：从外部分享进入时自动填入提取出的链接
+    LaunchedEffect(prefilledUrl) {
+        val link = prefilledUrl ?: return@LaunchedEffect
+        url = link
+        onPrefillConsumed()
+        Toast.makeText(context, "已自动填入分享的链接", Toast.LENGTH_SHORT).show()
     }
 
     /** 请求系统通知权限；系统已不再弹窗时（被永久拒绝）需到系统设置里手动开启 */
@@ -246,6 +268,25 @@ fun DownloadScreen(
         launchDownload(resume = true, fixedUrl = target)
     }
 
+    /**
+     * 一键保存到系统「下载」目录（MediaStore，API 29+ 免权限）；
+     * SAF 保留为「另存为」入口（P2-6）。
+     */
+    fun quickSaveToDownloads(file: File) {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                saveToPublicDownloads(context, file, mimeForFile(file))
+            } != null
+            if (ok) {
+                Toast.makeText(context, "已保存到系统下载目录", Toast.LENGTH_SHORT).show()
+                DownloadCenter.appendLog("已保存到系统下载目录：${file.name}")
+            } else {
+                Toast.makeText(context, "保存失败，可改用「另存为…」选择位置", Toast.LENGTH_LONG).show()
+                DownloadCenter.appendLog("保存到下载目录失败：${file.name}")
+            }
+        }
+    }
+
     var pendingSave by remember { mutableStateOf<File?>(null) }
     val saveVideoLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("video/mp4")
@@ -319,6 +360,32 @@ fun DownloadScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // 剪贴板一键填充（P2-4）
+                clipSuggestion?.let { link ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("剪贴板检测到链接", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                link,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        TextButton(onClick = {
+                            url = link
+                            clipSuggestion = null
+                        }) { Text("一键填充") }
+                        TextButton(onClick = {
+                            dismissedClipUrl = link
+                            clipSuggestion = null
+                        }) { Text("忽略") }
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { startDownload() },
@@ -357,7 +424,13 @@ fun DownloadScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(checked = useCookie, onCheckedChange = { useCookie = it })
+                    Switch(
+                        checked = useCookie,
+                        onCheckedChange = {
+                            useCookie = it
+                            cookieStore.setUseCookieEnabled(it)
+                        },
+                    )
                 }
 
                 // 已导入的平台，可单独清除（导入一次即长期保留）
@@ -470,13 +543,58 @@ fun DownloadScreen(
             }
         }
 
+        // 5. 存储空间：工具产物占用统计与一键清理（P2-9）
+        Card {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("5. 存储空间", style = MaterialTheme.typography.titleMedium)
+                var storageUsage by remember { mutableStateOf<Long?>(null) }
+                fun refreshUsage() {
+                    scope.launch {
+                        storageUsage = withContext(Dispatchers.IO) { AppStorage.totalBytes(context) }
+                    }
+                }
+                LaunchedEffect(Unit) { refreshUsage() }
+                Text(
+                    text = storageUsage?.let { "缓存与产物共占用 ${formatBytes(it)}" }
+                        ?: "统计中…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            val freed = withContext(Dispatchers.IO) { AppStorage.clean(context) }
+                            // .part 可能被清掉，刷新「继续下载」按钮的可用状态
+                            DownloadCenter.refreshResumable(context)
+                            Toast.makeText(
+                                context,
+                                "已释放 ${formatBytes(freed)}",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            refreshUsage()
+                        }
+                    },
+                    enabled = !running,
+                ) { Text("清理缓存（保留最近结果）") }
+                Text(
+                    "清理范围：下载残留与成品、转 GIF / 压缩产物、导入的临时副本；" +
+                        "每个目录保留最新的一份。下载进行中不可用。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         if (running || state.stage.isNotEmpty()) {
             Card {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("5. 状态", style = MaterialTheme.typography.titleMedium)
+                    Text("6. 状态", style = MaterialTheme.typography.titleMedium)
                     if (running) {
                         LinearProgressIndicator(
                             progress = { state.fraction },
@@ -508,7 +626,7 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("6. 下载结果", style = MaterialTheme.typography.titleMedium)
+                    Text("7. 下载结果", style = MaterialTheme.typography.titleMedium)
                     val meta = state.meta
                     Text(
                         "文件：${file.name}\n" +
@@ -519,10 +637,20 @@ fun DownloadScreen(
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { onSendToGif(file) }) { Text("去转 GIF") }
-                        OutlinedButton(onClick = {
-                            pendingSave = file
-                            saveVideoLauncher.launch(file.name)
-                        }) { Text("保存到本地") }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            Button(onClick = { quickSaveToDownloads(file) }) {
+                                Text("保存到下载")
+                            }
+                            OutlinedButton(onClick = {
+                                pendingSave = file
+                                saveVideoLauncher.launch(file.name)
+                            }) { Text("另存为…") }
+                        } else {
+                            OutlinedButton(onClick = {
+                                pendingSave = file
+                                saveVideoLauncher.launch(file.name)
+                            }) { Text("保存到本地") }
+                        }
                     }
                 }
             }
@@ -645,9 +773,11 @@ private const val HELP_PAGE =
         "只处理你有权访问的公开内容；媒体地址有时效性，下载后请尽快处理。"
 
 private const val HELP_URL =
-    "· 可直接粘贴 App 的分享文本，会自动去掉链接以外的文字。\n\n" +
+    "· 可直接粘贴 App 的分享文本，会自动去掉链接以外的文字；在浏览器/微信里" +
+        "「分享文本」到本 App 也可以直接填入。\n\n" +
         "· 目前不支持下载前获取清晰度列表，按默认最优格式下载；时长与分辨率在下载完成后本地读取。\n\n" +
         "· 「取消」为放弃等待，后台任务可能仍会跑完。\n\n" +
+        "· 网络波动导致的失败会自动续传重试两次；也可随时手动点「继续下载」接着下。\n\n" +
         "· 下载期间可放心切到后台（已用前台服务保活）；完成后是否提醒见下方「通知提醒」。\n\n" +
         "· YouTube 链接会返回 403（当前解析库限制）；X 与 Facebook 已实测可用。"
 
@@ -671,6 +801,12 @@ private const val HELP_PROXY =
         "· 用 VPN 类应用（全局接管流量）→ 这里留空即可；\n" +
         "· 用局域网代理（如电脑上的 7890 端口）→ 在这里填地址，会作为 --proxy 传给 yt-dlp。\n\n" +
         "支持 http://主机:端口、socks5://主机:端口；只填 主机:端口 会自动补 http://。留空 = 不使用代理。"
+
+/** 读取剪贴板文本（App 在前台时系统才允许读取；失败/无内容返回 null，绝不抛异常） */
+private fun readClipboardText(context: Context): String? = runCatching {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    cm?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
+}.getOrNull()
 
 /**
  * Cookie 匹配状态文案。
