@@ -14,8 +14,8 @@ android {
         // minSdk 24 与 ffmpeg-kit / yt-dlp-android 维护分支要求对齐；两者均只发布 64 位 ABI
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 7
+        versionName = "0.1.6"
 
         ndk {
             // 只保留 arm64-v8a（近几年真实手机均为此架构）。
