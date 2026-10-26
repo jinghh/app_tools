@@ -108,14 +108,29 @@ class YtDlpDownloader(private val context: Context) {
         while (true) {
             when (val terminal = runOnce(request, onEvent)) {
                 is DownloadEvent.Downloaded -> {
-                    // 成功：.part 已被 yt-dlp 重命名为成品，续传标记随之失效；
-                    // 成品移出 cacheDir（不受系统「清理缓存」影响），失败则留在原位
+                    // 成功：.part 已被 yt-dlp 重命名为成品，续传标记随之失效。
+                    //
+                    // 一条链接可能产出**多个视频**（yt-dlp 会用 "#1/#2" 后缀区分同名），
+                    // 因此这里把**所有**成品都移出 cacheDir：
+                    // 既避免被系统「清理缓存」清掉，也避免只移走一个、其余滞留在缓存里。
+                    // 界面结果取第一个（与 runOnce 的选择保持一致）。
                     runCatching { resumeMarker.delete() }
-                    val moved = runCatching { moveToFinalDir(terminal.file, context) }.getOrNull()
-                    if (moved != null && moved != terminal.file) {
-                        onEvent(DownloadEvent.Log("成品已移至长期目录：${moved.name}"))
+                    val movedAll = moveAllToFinalDir(context)
+                    val primary = movedAll.firstOrNull { it.name == terminal.file.name }
+                        ?: movedAll.firstOrNull()
+                        ?: terminal.file
+                    when {
+                        movedAll.size > 1 -> onEvent(
+                            DownloadEvent.Log(
+                                "本条链接共下载 ${movedAll.size} 个视频，" +
+                                    "已全部保存到长期目录；界面显示第 1 个"
+                            )
+                        )
+
+                        primary != terminal.file ->
+                            onEvent(DownloadEvent.Log("成品已移至长期目录：${primary.name}"))
                     }
-                    onEvent(DownloadEvent.Downloaded(moved ?: terminal.file))
+                    onEvent(DownloadEvent.Downloaded(primary))
                     return
                 }
 
@@ -182,7 +197,10 @@ class YtDlpDownloader(private val context: Context) {
             val file = outDir(context).listFiles()
                 // .part 是没写完的半成品，绝不能当成本次结果挑走
                 ?.filter { it.isFile && it.length() > 0L && !it.name.endsWith(PART_SUFFIX) }
-                ?.maxByOrNull { it.lastModified() }
+                // 多个视频时取**第一个**（下载顺序 = mtime 升序），而不是最新那个。
+                // 例如一条帖子含 2 个视频，yt-dlp 依次产出 "标题 #1.mp4"、"标题 #2.mp4"，
+                // 用户默认期望拿到第一个；此前取 newest 会拿到 #2。
+                ?.minByOrNull { it.lastModified() }
             if (file == null) {
                 DownloadEvent.Failure("下载完成但未找到输出文件", diagnostics())
             } else {
@@ -374,6 +392,20 @@ class YtDlpDownloader(private val context: Context) {
             runCatching { file.delete() }
             return target
         }
+
+        /**
+         * 把 outDir 里**所有**成品移到 [finalDir]，按下载顺序（mtime 升序）返回。
+         *
+         * 为什么不是只移一个：一条链接可能产出多个视频（yt-dlp 用 "#1/#2" 后缀区分），
+         * 只移最新那个会让其余文件滞留在 cacheDir，等着被系统「清理缓存」无声清掉。
+         * 单个文件失败的项会被跳过（不影响其余），返回值可能少于实际文件数。
+         */
+        fun moveAllToFinalDir(context: Context): List<File> =
+            outDir(context).listFiles()
+                ?.filter { it.isFile && it.length() > 0L && !it.name.endsWith(PART_SUFFIX) }
+                ?.sortedBy { it.lastModified() }
+                ?.mapNotNull { f -> runCatching { moveToFinalDir(f, context) }.getOrNull() }
+                ?: emptyList()
 
         /**
          * 可续传的半成品大小（.part 合计字节）。
