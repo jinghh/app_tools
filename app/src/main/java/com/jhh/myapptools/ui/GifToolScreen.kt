@@ -630,7 +630,8 @@ private fun ChipRow(
     }
 }
 
-private fun copyVideoToCache(context: Context, uri: Uri): File? =
+/** SAF 导入的视频复制到私有缓存；「视频转 GIF」与「视频压缩」共用 */
+internal fun copyVideoToCache(context: Context, uri: Uri): File? =
     copyUriToCache(context, uri, subDir = "video-input", fallbackExt = "mp4")
 
 /** 画质预设（P2-12）：一键写入的参数组合；写入后仍可单独微调 */

@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import com.jhh.myapptools.ui.DownloadScreen
 import com.jhh.myapptools.ui.GifCompressScreen
 import com.jhh.myapptools.ui.GifToolScreen
+import com.jhh.myapptools.ui.VideoCompressScreen
 import com.jhh.myapptools.ui.theme.AppTheme
 import com.jhh.myapptools.download.UrlExtractor
 import java.io.File
@@ -73,10 +75,11 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_TAB = "extra_tab"
-        /** 页签按使用频率排序：X 下载（最常用，默认页）→ 视频转 GIF → GIF 压缩 */
+        /** 页签按使用频率排序：X 下载（最常用，默认页）→ 视频转 GIF → GIF 压缩 → 视频压缩 */
         const val TAB_DOWNLOAD = 0
         const val TAB_GIF = 1
         const val TAB_COMPRESS = 2
+        const val TAB_VIDEO_COMPRESS = 3
     }
 }
 
@@ -107,13 +110,19 @@ private fun MainScreen(
                     selected = tab == MainActivity.TAB_GIF,
                     onClick = { tab = MainActivity.TAB_GIF },
                     icon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
-                    label = { Text("视频转 GIF") },
+                    label = { Text("转 GIF") },
                 )
                 NavigationBarItem(
                     selected = tab == MainActivity.TAB_COMPRESS,
                     onClick = { tab = MainActivity.TAB_COMPRESS },
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
                     label = { Text("GIF 压缩") },
+                )
+                NavigationBarItem(
+                    selected = tab == MainActivity.TAB_VIDEO_COMPRESS,
+                    onClick = { tab = MainActivity.TAB_VIDEO_COMPRESS },
+                    icon = { Icon(Icons.Filled.Build, contentDescription = null) },
+                    label = { Text("视频压缩") },
                 )
             }
         },
@@ -139,11 +148,13 @@ private fun MainScreen(
                 },
             )
 
-            else -> GifCompressScreen(
+            MainActivity.TAB_COMPRESS -> GifCompressScreen(
                 modifier = Modifier.padding(padding),
                 preloadedGif = pendingGif,
                 onPreloadConsumed = { pendingGif = null },
             )
+
+            else -> VideoCompressScreen(modifier = Modifier.padding(padding))
         }
     }
 }
