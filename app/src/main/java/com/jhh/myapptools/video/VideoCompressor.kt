@@ -33,6 +33,8 @@ class VideoCompressor {
     fun compress(
         input: File,
         targetBytes: Long,
+        /** 倍速（1.0 = 原速）。>1 缩短时长，体积约按倍数缩小、画质基本不损 */
+        speed: Float = 1f,
         onEvent: (VideoCompressEvent) -> Unit,
     ) {
         val startedAt = System.currentTimeMillis()
@@ -42,10 +44,15 @@ class VideoCompressor {
             onEvent(VideoCompressEvent.Failure("无法解析视频信息（时长/分辨率）"))
             return
         }
+        val safeSpeed = speed.coerceIn(1f, MAX_SPEED)
         val durationSec = info.durationMs / 1000.0
+        // 倍速后的实际时长：码率必须按它算，否则目标大小会算错（会偏小一半）
+        val effectiveSec = durationSec / safeSpeed
 
-        val ladder = buildLadder(targetBytes, durationSec, info.width)
+        val ladder = buildLadder(targetBytes, effectiveSec, info.width, safeSpeed)
         val outDir = File(input.parentFile, "video-compress-out").apply { mkdirs() }
+        // 清掉上一次（可能被中断/取消）残留的 round_*.mp4，否则会一直堆积占空间
+        outDir.listFiles()?.forEach { cleanup(it) }
 
         var lastValidFile: File? = null
         var lastValidLabel = ""
@@ -59,7 +66,7 @@ class VideoCompressor {
 
             onEvent(VideoCompressEvent.RoundStart(round, ladder.size, attempt.label))
 
-            val outcome = runRound(input, roundFile, attempt, durationSec) { fraction ->
+            val outcome = runRound(input, roundFile, attempt, effectiveSec, safeSpeed) { fraction ->
                 onEvent(
                     VideoCompressEvent.RoundProgress(
                         round, ladder.size, attempt.label, fraction,
@@ -116,7 +123,9 @@ class VideoCompressor {
                             originalBytes = originalBytes,
                             compressedBytes = bytes,
                             width = attempt.outWidth(info.width),
-                            durationMs = info.durationMs,
+                            // 输出时长 = 原时长 / 倍速（界面展示用）
+                            durationMs = (effectiveSec * 1000).toLong(),
+                            speed = safeSpeed,
                             finalLabel = attempt.label,
                             roundsUsed = round,
                             metTarget = true,
@@ -141,7 +150,8 @@ class VideoCompressor {
                     originalBytes = originalBytes,
                     compressedBytes = lastValidBytes,
                     width = lastValidWidth,
-                    durationMs = info.durationMs,
+                    durationMs = (effectiveSec * 1000).toLong(),
+                    speed = safeSpeed,
                     finalLabel = "$lastValidLabel（未达标）",
                     roundsUsed = roundsUsed,
                     metTarget = false,
@@ -156,14 +166,16 @@ class VideoCompressor {
         input: File,
         output: File,
         attempt: Attempt,
+        /** 进度分母：倍速后 ffmpeg 的 time= 走的是加速后的时间轴，必须传实际时长 */
         totalSec: Double,
+        speed: Float,
         onProgress: (Float) -> Unit,
     ): RoundOutcome {
         var lastLogs: String? = null
         for (encoder in ENCODERS) {
             cleanup(output)
             val outcome = FfmpegRunner.run(
-                args = buildArgs(input, output, attempt, encoder),
+                args = buildArgs(input, output, attempt, encoder, speed),
                 totalSec = totalSec,
                 onProgress = onProgress,
             )
@@ -187,11 +199,18 @@ class VideoCompressor {
         output: File,
         attempt: Attempt,
         encoder: Encoder,
+        speed: Float,
     ): Array<String> {
         val filters = buildList {
             attempt.maxWidth?.let { add("scale=min(iw\\,$it):-2") }
+            // setpts 只改时间戳、不丢帧 → 时长缩短、帧数不变，因此画质基本不损。
+            // 必须放在 fps 之前：fps 要在"已经加速后"的时间轴上抽帧才符合预期。
+            if (speed > 1.01f) add("setpts=PTS/${trimFloat(speed)}")
             attempt.fps?.let { add("fps=$it") }
         }.joinToString(",")
+
+        // 音频同步加速，否则音画不同步（atempo 单实例上限 2.0，更高则串联）
+        val audioFilter = atempoChain(speed)
 
         return buildList {
             add("-hide_banner")
@@ -200,6 +219,9 @@ class VideoCompressor {
             add("-i"); add(input.absolutePath)
             if (filters.isNotEmpty()) {
                 add("-vf"); add(filters)
+            }
+            if (audioFilter.isNotEmpty()) {
+                add("-af"); add(audioFilter)
             }
             add("-c:v"); add(encoder.ffmpegName)
             add("-b:v"); add("${attempt.videoKbps}k")
@@ -212,14 +234,35 @@ class VideoCompressor {
         }.toTypedArray()
     }
 
+    /** atempo 单实例安全范围是 0.5~2.0；超过 2 就用多级串联（如 4x → 2.0,2.0） */
+    private fun atempoChain(speed: Float): String {
+        if (speed <= 1.01f) return ""
+        val parts = mutableListOf<String>()
+        var remain = speed
+        while (remain > 2.0f) {
+            parts += "atempo=2.0"
+            remain /= 2f
+        }
+        parts += "atempo=${trimFloat(remain)}"
+        return parts.joinToString(",")
+    }
+
+    /** 1.5f → "1.5"，2.0f → "2"（避免生成 setpts=PTS/2.0 这种多余写法） */
+    private fun trimFloat(value: Float): String {
+        val text = String.format(java.util.Locale.US, "%.2f", value)
+        return text.trimEnd('0').trimEnd('.')
+    }
+
     /**
      * 构建码率阶梯。体积 ≈ 码率 × 时长，所以**码率是决定体积的主旋钮**；
      * 降分辨率/帧率的作用是"在同样码率下让观感更好"，因此排在后面。
      */
     private fun buildLadder(
         targetBytes: Long,
+        /** 倍速后的实际时长（体积 ≈ 码率 × 该时长） */
         durationSec: Double,
         srcWidth: Int,
+        speed: Float,
     ): List<Attempt> {
         // 目标总码率（kbps）；留 5% 给容器/封装开销
         val totalKbps = (targetBytes * 8.0 * 0.95 / durationSec / 1000.0).toInt()
@@ -229,11 +272,17 @@ class VideoCompressor {
         val audioFull = (totalKbps / 8).coerceIn(48, 128)
         val videoFull = (totalKbps - audioFull).coerceAtLeast(MIN_VIDEO_KBPS)
 
+        // 倍速由用户显式选择，只在文案上标注；**不参与阶梯决策**
+        // （自动加速会让用户措手不及——内容被改了却没人告知）
+        val prefix = if (speed > 1.01f) "${trimFloat(speed)}x 倍速 · " else ""
+
         val ladder = mutableListOf<Attempt>()
-        ladder += Attempt(videoFull, audioFull, null, null, "原分辨率 · ${videoFull}kbps")
+        ladder += Attempt(
+            videoFull, audioFull, null, null, "${prefix}原分辨率 · ${videoFull}kbps",
+        )
         ladder += Attempt(
             (videoFull * 0.8).toInt().coerceAtLeast(MIN_VIDEO_KBPS),
-            audioFull, null, null, "原分辨率 · 码率 -20%",
+            audioFull, null, null, "${prefix}原分辨率 · 码率 -20%",
         )
         // 只在源更宽时才降分辨率（不放大）
         for (w in listOf(1280, 854, 640)) {
@@ -242,14 +291,14 @@ class VideoCompressor {
             ladder += Attempt(
                 (videoFull * 0.8).toInt().coerceAtLeast(MIN_VIDEO_KBPS),
                 if (w <= 854) 64 else audioFull,
-                w, fps, "${w}px" + (fps?.let { " · ${it}fps" } ?: ""),
+                w, fps, "${prefix}${w}px" + (fps?.let { " · ${it}fps" } ?: ""),
             )
         }
         // 兜底档：更低的码率 + 640px + 15fps
         if (srcWidth > 640) {
             ladder += Attempt(
                 (videoFull * 0.6).toInt().coerceAtLeast(MIN_VIDEO_KBPS),
-                48, 640, 15, "640px · 15fps · 最低码率",
+                48, 640, 15, "${prefix}640px · 15fps · 最低码率",
             )
         }
         return ladder
@@ -294,6 +343,9 @@ class VideoCompressor {
         /** 码率低于此值画面基本不可用，作为下限 */
         const val MIN_VIDEO_KBPS = 100
 
+        /** 倍速上限：再高画面基本无法观看 */
+        const val MAX_SPEED = 4f
+
         val ENCODERS = listOf(Encoder.H264_MEDIACODEC, Encoder.MPEG4)
     }
 }
@@ -303,7 +355,10 @@ data class VideoCompressResult(
     val originalBytes: Long,
     val compressedBytes: Long,
     val width: Int,
+    /** 输出时长（倍速后的实际时长） */
     val durationMs: Long,
+    /** 倍速倍数，1.0 = 原速 */
+    val speed: Float = 1f,
     val finalLabel: String,
     val roundsUsed: Int,
     /** false = 走完阶梯仍未达标，已保留最后可用结果 */

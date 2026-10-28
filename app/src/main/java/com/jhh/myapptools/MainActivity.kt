@@ -154,7 +154,14 @@ private fun MainScreen(
                 onPreloadConsumed = { pendingGif = null },
             )
 
-            else -> VideoCompressScreen(modifier = Modifier.padding(padding))
+            else -> VideoCompressScreen(
+                modifier = Modifier.padding(padding),
+                // 压缩结果 → 转 GIF：与「下载 → 转 GIF」同一套 pendingVideo 中转
+                onSendToGif = { file ->
+                    pendingVideo = file
+                    tab = MainActivity.TAB_GIF
+                },
+            )
         }
     }
 }

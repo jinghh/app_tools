@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -624,6 +625,12 @@ private fun ChipRow(
                     onClick = { onSelect(option) },
                     enabled = enabled,
                     label = { Text(option.toString()) },
+                    // 选中态统一成「视频压缩」页倍速/预设的样式（primary 实心 + onPrimary 文字），
+                    // 默认的 secondaryContainer 与其它页面不一致
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
                 )
             }
         }

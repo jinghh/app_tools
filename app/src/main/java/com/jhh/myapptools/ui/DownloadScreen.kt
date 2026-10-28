@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -635,21 +636,42 @@ fun DownloadScreen(
                             "分辨率：${meta?.let { "${it.width}x${it.height}" } ?: "读取中…"}",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onSendToGif(file) }) { Text("去转 GIF") }
+                    // 三个按钮等分宽度 + 收窄内边距：Button 默认 24dp 横向 padding 会把
+                    // 第三个按钮挤到换行，"另存为…" 会变成竖排三行
+                    val actionPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = { onSendToGif(file) },
+                            contentPadding = actionPadding,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("去转 GIF", maxLines = 1) }
+
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            Button(onClick = { quickSaveToDownloads(file) }) {
-                                Text("保存到下载")
-                            }
-                            OutlinedButton(onClick = {
-                                pendingSave = file
-                                saveVideoLauncher.launch(file.name)
-                            }) { Text("另存为…") }
+                            Button(
+                                onClick = { quickSaveToDownloads(file) },
+                                contentPadding = actionPadding,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("存到下载", maxLines = 1) }
+                            OutlinedButton(
+                                onClick = {
+                                    pendingSave = file
+                                    saveVideoLauncher.launch(file.name)
+                                },
+                                contentPadding = actionPadding,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("另存为", maxLines = 1) }
                         } else {
-                            OutlinedButton(onClick = {
-                                pendingSave = file
-                                saveVideoLauncher.launch(file.name)
-                            }) { Text("保存到本地") }
+                            OutlinedButton(
+                                onClick = {
+                                    pendingSave = file
+                                    saveVideoLauncher.launch(file.name)
+                                },
+                                contentPadding = actionPadding,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("另存为", maxLines = 1) }
                         }
                     }
                 }

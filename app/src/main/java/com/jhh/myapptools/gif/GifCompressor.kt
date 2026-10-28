@@ -44,6 +44,8 @@ class GifCompressor {
 
         val ladder = buildLadder(srcInfo.width, lossyPreferred)
         val outDir = File(input.parentFile, "compress-out").apply { mkdirs() }
+        // 清掉上一次（可能被中断/取消）残留的 round_*.gif，否则会一直堆积占空间
+        outDir.listFiles()?.forEach { runCatching { it.delete() } }
         // GIF 无全局时长字段；按 12fps 估算，仅用于进度显示
         val estimatedSec = maxOf(1.0, srcInfo.frameCount / 12.0)
 

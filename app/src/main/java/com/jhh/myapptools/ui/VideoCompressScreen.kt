@@ -43,6 +43,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 /**
  * 视频压缩（目标大小）。
@@ -52,7 +53,11 @@ import java.io.File
  * 编码器为硬件 H.264（ffmpeg-kit-min 不含 libx264），失败自动回落 mpeg4。
  */
 @Composable
-fun VideoCompressScreen(modifier: Modifier = Modifier) {
+fun VideoCompressScreen(
+    modifier: Modifier = Modifier,
+    /** 把压缩结果直传给「视频转 GIF」页（免去手动保存再导入） */
+    onSendToGif: (File) -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val compressor = remember { VideoCompressor() }
@@ -63,6 +68,9 @@ fun VideoCompressScreen(modifier: Modifier = Modifier) {
 
     /** 默认 25MB：微信发视频的上限 */
     var targetMbText by remember { mutableStateOf("25") }
+
+    /** 倍速：1f = 原速。>1 缩短时长，体积约按倍数缩小（画质基本不损） */
+    var speed by remember { mutableFloatStateOf(1f) }
 
     var running by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -161,13 +169,13 @@ fun VideoCompressScreen(modifier: Modifier = Modifier) {
         stage = "准备中"
         result = null
         errorText = null
-        appendLog("开始压缩：目标 ${targetMb}MB（$targetBytes bytes）")
+        appendLog("开始压缩：目标 ${targetMb}MB（$targetBytes bytes），倍速 ${speedText(speed)}")
 
         val events = Channel<VideoCompressEvent>(Channel.UNLIMITED)
         scope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    compressor.compress(input, targetBytes) { events.trySend(it) }
+                    compressor.compress(input, targetBytes, speed) { events.trySend(it) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -299,6 +307,44 @@ fun VideoCompressScreen(modifier: Modifier = Modifier) {
                         }
                     }
                 }
+
+                // 倍速：缩短时长 → 体积约按倍数缩小，且画质基本不损（每帧分到的比特不变）
+                Text("倍速", style = MaterialTheme.typography.bodyMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    listOf(1f, 1.5f, 2f, 3f, 4f).forEach { option ->
+                        val label = speedText(option)
+                        if (speed == option) {
+                            Button(
+                                onClick = { speed = option },
+                                enabled = !running,
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                                modifier = Modifier.weight(1f),
+                            ) { Text(label, maxLines = 1, softWrap = false) }
+                        } else {
+                            OutlinedButton(
+                                onClick = { speed = option },
+                                enabled = !running,
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                                modifier = Modifier.weight(1f),
+                            ) { Text(label, maxLines = 1, softWrap = false) }
+                        }
+                    }
+                }
+                Text(
+                    text = if (speed <= 1.01f) {
+                        "原速：不改变时长，只按目标大小压缩"
+                    } else {
+                        val origSec = (inputInfo?.durationMs ?: 0L) / 1000.0
+                        val outSec = origSec / speed
+                        "输出时长约 ${formatSeconds(outSec)}（原 ${formatSeconds(origSec)}）" +
+                            "；体积约缩小到 1/${speedText(speed)}，画质基本不变"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -344,6 +390,8 @@ fun VideoCompressScreen(modifier: Modifier = Modifier) {
                         "文件 ${r.file.name}\n" +
                             "大小 ${formatBytes(r.compressedBytes)}" +
                             "（原 ${formatBytes(r.originalBytes)}）\n" +
+                            "时长 ${formatSeconds(r.durationMs / 1000.0)}" +
+                            (if (r.speed > 1.01f) " · ${speedText(r.speed)} 倍速" else "") + "\n" +
                             "参数 ${r.finalLabel}\n" +
                             "轮次 ${r.roundsUsed} · 用时 ${r.elapsedMs}ms",
                         style = MaterialTheme.typography.bodyMedium,
@@ -355,14 +403,33 @@ fun VideoCompressScreen(modifier: Modifier = Modifier) {
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { quickSaveToDownloads(r.file) }) {
-                            Text("保存到下载目录")
-                        }
-                        OutlinedButton(onClick = {
-                            pendingSave = r
-                            saveVideoLauncher.launch("compressed_${System.currentTimeMillis()}.mp4")
-                        }) { Text("另存为…") }
+                    // 三个按钮等分宽度 + 收窄内边距：默认 24dp 的横向 padding 会让
+                    // 第三个按钮被挤压、文字竖排
+                    val actionPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = { onSendToGif(r.file) },
+                            contentPadding = actionPadding,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("转 GIF", maxLines = 1) }
+                        Button(
+                            onClick = { quickSaveToDownloads(r.file) },
+                            contentPadding = actionPadding,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("存到下载", maxLines = 1) }
+                        OutlinedButton(
+                            onClick = {
+                                pendingSave = r
+                                saveVideoLauncher.launch(
+                                    "compressed_${System.currentTimeMillis()}.mp4"
+                                )
+                            },
+                            contentPadding = actionPadding,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("另存为", maxLines = 1) }
                     }
                 }
             }
@@ -397,3 +464,14 @@ fun VideoCompressScreen(modifier: Modifier = Modifier) {
         }
     }
 }
+
+/** 倍速文案：1.0 → 原速；1.5 → 1.5x；2.0 → 2x */
+private fun speedText(speed: Float): String {
+    if (speed <= 1.01f) return "原速"
+    val text = String.format(Locale.US, "%.1f", speed)
+    return text.trimEnd('0').trimEnd('.') + "x"
+}
+
+/** 秒数展示：保留一位小数，0 时显示 -- */
+private fun formatSeconds(seconds: Double): String =
+    if (seconds <= 0.0) "--" else String.format(Locale.US, "%.1fs", seconds)
