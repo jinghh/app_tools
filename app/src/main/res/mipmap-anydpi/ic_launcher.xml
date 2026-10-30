@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 24~25 的兜底图标（这两版还没有自适应图标）。
+  直接叠背景 + 前景，效果等同旧版 layer-list，但走 mipmap 命名以便清单统一引用。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

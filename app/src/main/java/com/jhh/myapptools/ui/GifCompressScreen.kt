@@ -21,7 +21,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -74,7 +73,16 @@ fun GifCompressScreen(
     var inputInfo by remember { mutableStateOf<GifInspector.Info?>(null) }
     var inputBytes by remember { mutableStateOf(0L) }
 
-    var targetMbText by remember { mutableStateOf("20") }
+    /** 默认 20MB（文档默认值）；之后记忆上次使用值（C6） */
+    var targetMbText by remember {
+        mutableStateOf(AppPrefs.getString(context, AppPrefs.KEY_TARGET_GIF, "20"))
+    }
+    LaunchedEffect(targetMbText) {
+        // 空串不保存：否则清空输入后重启 App 会恢复成空值，"记忆上次使用值"失效
+        if (targetMbText.isNotBlank()) {
+            AppPrefs.setString(context, AppPrefs.KEY_TARGET_GIF, targetMbText)
+        }
+    }
     /** 有损优先：保持帧率 / 尺寸 / 256 色不变，先降抖动与细节 */
     var lossyPreferred by remember { mutableStateOf(false) }
 
@@ -273,26 +281,34 @@ fun GifCompressScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ScreenScaffold(
+        modifier = modifier,
+        title = "GIF 压缩",
+        actionBar = {
+            PrimaryActionBar(
+                primaryText = "开始压缩",
+                onPrimary = { startCompress() },
+                primaryEnabled = !running && inputFile != null,
+                secondaryText = "取消",
+                onSecondary = { compressor.cancel() },
+                secondaryEnabled = running,
+                progress = if (running) progress else null,
+                stageText = if (running) "$stage · ${(progress * 100).toInt()}%" else null,
+            )
+        },
     ) {
-        Text("GIF 压缩", style = MaterialTheme.typography.headlineSmall)
         Text(
             "导入任意 GIF，按策略级联压缩至目标大小；原文件不会被覆盖",
             style = MaterialTheme.typography.bodySmall,
         )
 
-        // 1. 导入
+        // 导入
         Card {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("1. 选择 GIF", style = MaterialTheme.typography.titleMedium)
+                Text("选择 GIF", style = MaterialTheme.typography.titleMedium)
                 Button(
                     onClick = { pickGifLauncher.launch(arrayOf("image/gif")) },
                     enabled = !running,
@@ -313,7 +329,7 @@ fun GifCompressScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("2. 目标大小", style = MaterialTheme.typography.titleMedium)
+                Text("目标大小与策略", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     value = targetMbText,
                     onValueChange = { targetMbText = it.filter { c -> c.isDigit() || c == '.' } },
@@ -349,44 +365,14 @@ fun GifCompressScreen(
             }
         }
 
-        // 3. 执行
-        Card {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("3. 执行", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { startCompress() },
-                        enabled = !running && inputFile != null,
-                    ) { Text("开始压缩") }
-                    OutlinedButton(
-                        onClick = { compressor.cancel() },
-                        enabled = running,
-                    ) { Text("取消") }
-                }
-                if (running) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        "$stage · ${(progress * 100).toInt()}%",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-        }
-
-        // 4. 结果
+        // 结果
         result?.let { r ->
             Card {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("4. 结果", style = MaterialTheme.typography.titleMedium)
+                    Text("结果", style = MaterialTheme.typography.titleMedium)
                     val ratio = if (r.originalBytes > 0) {
                         String.format(
                             Locale.US,

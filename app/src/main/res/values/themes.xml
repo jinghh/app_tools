@@ -1,7 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- 仅需一个无 ActionBar 的基础主题；UI 由 Compose Material3 承担 -->
     <style name="Theme.MyAppTools" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- 引用颜色资源而非写死白色：暗色模式由 values-night 覆盖，消除启动白闪 -->
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

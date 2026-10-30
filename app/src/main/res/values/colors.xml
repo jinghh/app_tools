@@ -1,3 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#1B5E20</color>
+    <!--
+      窗口背景：Compose 起来之前显示的那一层。
+      原来写死 @android:color/white，暗色模式下启动会白闪一下；
+      改为引用本颜色，并在 values-night/colors.xml 给出暗色值。
+    -->
+    <color name="window_background">#FAFDFB</color>
 </resources>

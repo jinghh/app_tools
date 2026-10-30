@@ -1,12 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标前景层：一个「T 形 + 向下箭头」的融合符号。
+  - 横杠 = T（Tools / 工具箱）
+  - 竖杠末端收成箭头 = 下载 / 导入
+  用 stroke + round cap 画，比逐点描 path 更简洁，任意尺寸都保持圆润。
+
+  安全区：自适应图标只保证中心 72×72（108 视口内 18..90）不被裁切，
+  本图形的包围盒约为 x 26..82、y 28..82，落在安全区内。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- 横杠 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M42,36 L72,54 L42,72 Z" />
+        android:pathData="M32,34 L76,34"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="11"
+        android:strokeLineCap="round" />
+
+    <!-- 竖杠 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M30,30 L36,30 L36,78 L30,78 Z M72,30 L78,30 L78,78 L72,78 Z" />
+        android:pathData="M54,34 L54,58"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="11"
+        android:strokeLineCap="round" />
+
+    <!-- 箭头 -->
+    <path
+        android:pathData="M41,57 L54,74 L67,57"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="11"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 </vector>

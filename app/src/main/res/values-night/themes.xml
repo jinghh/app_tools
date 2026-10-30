@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      暗色模式覆盖：换成平台暗色基础主题 + 深色窗口背景。
+      原来父主题固定为 Light 且 windowBackground 写死白色，暗色模式下启动会闪白。
+    -->
+    <style name="Theme.MyAppTools" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

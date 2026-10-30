@@ -312,27 +312,29 @@ fun DownloadScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ScreenScaffold(
+        modifier = modifier,
+        title = "视频下载",
+        titleExtra = { HelpIcon(title = "视频下载", text = HELP_PAGE) },
+        actionBar = {
+            PrimaryActionBar(
+                primaryText = "开始下载",
+                onPrimary = { startDownload() },
+                primaryEnabled = !running && url.isNotBlank(),
+                secondaryText = "取消",
+                onSecondary = { DownloadCenter.cancel() },
+                secondaryEnabled = running,
+                progress = if (running) state.fraction else null,
+                stageText = if (running) state.stage else null,
+            )
+        },
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text("视频下载", style = MaterialTheme.typography.headlineSmall)
-            HelpIcon(title = "视频下载", text = HELP_PAGE)
-        }
-
         Card {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TitleWithHelp("1. 视频链接", "链接与下载说明", HELP_URL)
+                TitleWithHelp("视频链接", "链接与下载说明", HELP_URL)
                 OutlinedTextField(
                     value = url,
                     onValueChange = { raw ->
@@ -387,16 +389,6 @@ fun DownloadScreen(
                         }) { Text("忽略") }
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { startDownload() },
-                        enabled = !running && url.isNotBlank(),
-                    ) { Text("开始下载") }
-                    OutlinedButton(
-                        onClick = { DownloadCenter.cancel() },
-                        enabled = running,
-                    ) { Text("取消") }
-                }
             }
         }
 
@@ -406,7 +398,7 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TitleWithHelp("2. 登录 Cookie（可选）", "登录 Cookie 说明", HELP_COOKIE)
+                TitleWithHelp("登录 Cookie（可选）", "登录 Cookie 说明", HELP_COOKIE)
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -478,7 +470,7 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TitleWithHelp("3. 网络代理（可选）", "网络代理说明", HELP_PROXY)
+                TitleWithHelp("网络代理（可选）", "网络代理说明", HELP_PROXY)
                 OutlinedTextField(
                     value = proxyText,
                     onValueChange = {
@@ -514,7 +506,7 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TitleWithHelp("4. 通知提醒（可选）", "通知提醒说明", HELP_NOTIFY)
+                TitleWithHelp("通知提醒（可选）", "通知提醒说明", HELP_NOTIFY)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -550,7 +542,7 @@ fun DownloadScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("5. 存储空间", style = MaterialTheme.typography.titleMedium)
+                Text("存储空间", style = MaterialTheme.typography.titleMedium)
                 var storageUsage by remember { mutableStateOf<Long?>(null) }
                 fun refreshUsage() {
                     scope.launch {
@@ -595,7 +587,7 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("6. 状态", style = MaterialTheme.typography.titleMedium)
+                    Text("状态", style = MaterialTheme.typography.titleMedium)
                     if (running) {
                         LinearProgressIndicator(
                             progress = { state.fraction },
@@ -627,7 +619,7 @@ fun DownloadScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("7. 下载结果", style = MaterialTheme.typography.titleMedium)
+                    Text("下载结果", style = MaterialTheme.typography.titleMedium)
                     val meta = state.meta
                     Text(
                         "文件：${file.name}\n" +
