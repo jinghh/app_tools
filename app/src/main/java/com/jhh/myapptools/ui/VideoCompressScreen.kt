@@ -15,6 +15,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -55,6 +57,9 @@ import java.util.Locale
 @Composable
 fun VideoCompressScreen(
     modifier: Modifier = Modifier,
+    /** 由下载模块直传的视频（已在私有目录，无需再经 SAF 导入） */
+    preloadedVideo: File? = null,
+    onPreloadConsumed: () -> Unit = {},
     /** 把压缩结果直传给「视频转 GIF」页（免去手动保存再导入） */
     onSendToGif: (File) -> Unit = {},
 ) {
@@ -89,6 +94,26 @@ fun VideoCompressScreen(
 
     fun appendLog(line: String) {
         logs = (logs + line).takeLast(60)
+    }
+
+    // ---------- 接收下载模块直传的视频 ----------
+    LaunchedEffect(preloadedVideo) {
+        val file = preloadedVideo ?: return@LaunchedEffect
+        val info = withContext(Dispatchers.IO) { VideoMetadata.read(file) }
+        inputFile = file
+        inputBytes = file.length()
+        inputInfo = info
+        result = null
+        errorText = null
+        if (info != null) {
+            appendLog(
+                "已接收下载的视频：${file.name}（${formatBytes(file.length())}，" +
+                    "${info.durationMs / 1000}s，${info.width}x${info.height}）"
+            )
+        } else {
+            appendLog("已接收下载的视频，但无法解析元信息：${file.name}")
+        }
+        onPreloadConsumed()
     }
 
     val pickVideoLauncher = rememberLauncherForActivityResult(
@@ -255,18 +280,6 @@ fun VideoCompressScreen(
     ScreenScaffold(
         modifier = modifier,
         title = "视频压缩",
-        actionBar = {
-            PrimaryActionBar(
-                primaryText = "开始压缩",
-                onPrimary = { startCompress() },
-                primaryEnabled = !running && inputFile != null,
-                secondaryText = "取消",
-                onSecondary = { compressor.cancel() },
-                secondaryEnabled = running,
-                progress = if (running) progress else null,
-                stageText = if (running) "$stage · ${(progress * 100).toInt()}%" else null,
-            )
-        },
     ) {
         // 导入
         Card {
@@ -363,6 +376,36 @@ fun VideoCompressScreen(
             }
         }
 
+        // 执行
+        Card {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("执行", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { startCompress() },
+                        enabled = !running && inputFile != null,
+                    ) { Text("开始压缩") }
+                    OutlinedButton(
+                        onClick = { compressor.cancel() },
+                        enabled = running,
+                    ) { Text("取消") }
+                }
+                if (running) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "$stage · ${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+
         // 结果
         result?.let { r ->
             Card {
@@ -388,18 +431,12 @@ fun VideoCompressScreen(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    // 三个按钮等分宽度 + 收窄内边距：默认 24dp 的横向 padding 会让
-                    // 第三个按钮被挤压、文字竖排
+                    // 两个保存类按钮等分宽度 + 收窄内边距，避免文字被挤成竖排
                     val actionPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Button(
-                            onClick = { onSendToGif(r.file) },
-                            contentPadding = actionPadding,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("转 GIF", maxLines = 1) }
                         Button(
                             onClick = { quickSaveToDownloads(r.file) },
                             contentPadding = actionPadding,
@@ -416,6 +453,12 @@ fun VideoCompressScreen(
                             modifier = Modifier.weight(1f),
                         ) { Text("另存为", maxLines = 1) }
                     }
+                    // 压缩成功后的下一步：底部一键转 GIF（免去手动保存再导入）
+                    FilledTonalButton(
+                        onClick = { onSendToGif(r.file) },
+                        contentPadding = actionPadding,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("转 GIF") }
                 }
             }
         }

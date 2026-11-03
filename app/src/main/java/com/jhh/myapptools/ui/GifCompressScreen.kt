@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -284,18 +285,6 @@ fun GifCompressScreen(
     ScreenScaffold(
         modifier = modifier,
         title = "GIF 压缩",
-        actionBar = {
-            PrimaryActionBar(
-                primaryText = "开始压缩",
-                onPrimary = { startCompress() },
-                primaryEnabled = !running && inputFile != null,
-                secondaryText = "取消",
-                onSecondary = { compressor.cancel() },
-                secondaryEnabled = running,
-                progress = if (running) progress else null,
-                stageText = if (running) "$stage · ${(progress * 100).toInt()}%" else null,
-            )
-        },
     ) {
         Text(
             "导入任意 GIF，按策略级联压缩至目标大小；原文件不会被覆盖",
@@ -360,6 +349,36 @@ fun GifCompressScreen(
                         checked = lossyPreferred,
                         onCheckedChange = { lossyPreferred = it },
                         enabled = !running,
+                    )
+                }
+            }
+        }
+
+        // 执行
+        Card {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("执行", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { startCompress() },
+                        enabled = !running && inputFile != null,
+                    ) { Text("开始压缩") }
+                    OutlinedButton(
+                        onClick = { compressor.cancel() },
+                        enabled = running,
+                    ) { Text("取消") }
+                }
+                if (running) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "$stage · ${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }

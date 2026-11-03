@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -48,7 +49,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -88,7 +88,12 @@ fun DownloadScreen(
     /** 分享直达（ACTION_SEND）提取出的链接；填入输入框后由回调置空（见 MainActivity） */
     prefilledUrl: String? = null,
     onPrefillConsumed: () -> Unit = {},
+    /** 剪贴板确认后的链接：填入输入框并**立即开始下载**（检测已提升到 MainActivity 全局） */
+    autoDownloadUrl: String? = null,
+    onAutoDownloadConsumed: () -> Unit = {},
     onSendToGif: (File) -> Unit = {},
+    /** 下载完成后直接交给「视频压缩」页（免去手动保存再导入） */
+    onSendToCompress: (File) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -104,11 +109,6 @@ fun DownloadScreen(
     // 开关持久化（P2-11）：与代理/通知开关一致，下次进来恢复上次选择
     var useCookie by remember { mutableStateOf(cookieStore.isUseCookieEnabled()) }
     var url by remember { mutableStateOf("") }
-
-    // 剪贴板检测（P2-4）：进入页面时若剪贴板有链接，给「一键填充」；
-    // 忽略过的链接本次会话内不再打扰，同一链接填过也不重复提示
-    var clipSuggestion by remember { mutableStateOf<String?>(null) }
-    var dismissedClipUrl by remember { mutableStateOf<String?>(null) }
 
     // 当前链接自动匹配到的平台 Cookie（随输入/列表变化重算，避免每帧做文件 IO）
     val matchedCookie = remember(url, cookieEntries) { cookieStore.matchForUrl(url) }
@@ -150,13 +150,10 @@ fun DownloadScreen(
     }
 
     // 从系统设置返回时同步真实权限状态（用户可能刚在设置里改过）；
-    // 顺带刷新断点残留大小（覆盖"进程被杀后重启"也能看到可续传内容的情况），
-    // 并做剪贴板检测（App 拿到焦点时系统才允许读取）
+    // 顺带刷新断点残留大小（覆盖"进程被杀后重启"也能看到可续传内容的情况）
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         permissionGranted = notifyPrefs.isSystemPermissionGranted()
         DownloadCenter.refreshResumable(context)
-        val extracted = readClipboardText(context)?.let { UrlExtractor.extract(it) }
-        clipSuggestion = extracted?.takeIf { it != url.trim() && it != dismissedClipUrl }
     }
 
     // 分享直达（P2-5）：从外部分享进入时自动填入提取出的链接
@@ -269,6 +266,20 @@ fun DownloadScreen(
         launchDownload(resume = true, fixedUrl = target)
     }
 
+    // 剪贴板确认后：填入输入框并立即开始下载（检测本身在 MainActivity 全局完成）
+    LaunchedEffect(autoDownloadUrl) {
+        val link = autoDownloadUrl ?: return@LaunchedEffect
+        url = link
+        if (running) {
+            // 已有任务在跑时不抢跑，只把链接填好，等这次结束用户可再点「开始下载」
+            Toast.makeText(context, "已有下载任务进行中，链接已填入", Toast.LENGTH_LONG).show()
+        } else {
+            launchDownload(resume = false, fixedUrl = link)
+        }
+        // 先启动再消费：消费会触发重组并取消本 LaunchedEffect，放在最后更稳妥
+        onAutoDownloadConsumed()
+    }
+
     /**
      * 一键保存到系统「下载」目录（MediaStore，API 29+ 免权限）；
      * SAF 保留为「另存为」入口（P2-6）。
@@ -316,18 +327,6 @@ fun DownloadScreen(
         modifier = modifier,
         title = "视频下载",
         titleExtra = { HelpIcon(title = "视频下载", text = HELP_PAGE) },
-        actionBar = {
-            PrimaryActionBar(
-                primaryText = "开始下载",
-                onPrimary = { startDownload() },
-                primaryEnabled = !running && url.isNotBlank(),
-                secondaryText = "取消",
-                onSecondary = { DownloadCenter.cancel() },
-                secondaryEnabled = running,
-                progress = if (running) state.fraction else null,
-                stageText = if (running) state.stage else null,
-            )
-        },
     ) {
         Card {
             Column(
@@ -363,31 +362,15 @@ fun DownloadScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                // 剪贴板一键填充（P2-4）
-                clipSuggestion?.let { link ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("剪贴板检测到链接", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                link,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        TextButton(onClick = {
-                            url = link
-                            clipSuggestion = null
-                        }) { Text("一键填充") }
-                        TextButton(onClick = {
-                            dismissedClipUrl = link
-                            clipSuggestion = null
-                        }) { Text("忽略") }
-                    }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { startDownload() },
+                        enabled = !running && url.isNotBlank(),
+                    ) { Text("开始下载") }
+                    OutlinedButton(
+                        onClick = { DownloadCenter.cancel() },
+                        enabled = running,
+                    ) { Text("取消") }
                 }
             }
         }
@@ -666,6 +649,12 @@ fun DownloadScreen(
                             ) { Text("另存为", maxLines = 1) }
                         }
                     }
+                    // 下载完成后的下一步：直接交给「视频压缩」（微信 25MB 等场景）
+                    FilledTonalButton(
+                        onClick = { onSendToCompress(file) },
+                        contentPadding = actionPadding,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("视频压缩") }
                 }
             }
         }
@@ -815,12 +804,6 @@ private const val HELP_PROXY =
         "· 用 VPN 类应用（全局接管流量）→ 这里留空即可；\n" +
         "· 用局域网代理（如电脑上的 7890 端口）→ 在这里填地址，会作为 --proxy 传给 yt-dlp。\n\n" +
         "支持 http://主机:端口、socks5://主机:端口；只填 主机:端口 会自动补 http://。留空 = 不使用代理。"
-
-/** 读取剪贴板文本（App 在前台时系统才允许读取；失败/无内容返回 null，绝不抛异常） */
-private fun readClipboardText(context: Context): String? = runCatching {
-    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    cm?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
-}.getOrNull()
 
 /**
  * Cookie 匹配状态文案。

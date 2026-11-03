@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -311,18 +312,6 @@ fun GifToolScreen(
     ScreenScaffold(
         modifier = modifier,
         title = "视频转 GIF",
-        actionBar = {
-            PrimaryActionBar(
-                primaryText = "开始转换",
-                onPrimary = { startEncode() },
-                primaryEnabled = !running && inputFile != null,
-                secondaryText = "取消",
-                onSecondary = { engine.cancel() },
-                secondaryEnabled = running,
-                progress = if (running) progress else null,
-                stageText = if (running) "$stage · ${(progress * 100).toInt()}%" else null,
-            )
-        },
     ) {
         // 导入视频
         Card {
@@ -479,7 +468,37 @@ fun GifToolScreen(
             }
         }
 
-        // 实际执行的命令（排查用；主操作已固定到底部操作条）
+        // 执行
+        Card {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("执行", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { startEncode() },
+                        enabled = !running && inputFile != null,
+                    ) { Text("开始转换") }
+                    OutlinedButton(
+                        onClick = { engine.cancel() },
+                        enabled = running,
+                    ) { Text("取消") }
+                }
+                if (running) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "$stage · ${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+
+        // 实际执行的命令（排查用）
         if (ffmpegCommand.isNotEmpty()) {
             Card {
                 Column(
