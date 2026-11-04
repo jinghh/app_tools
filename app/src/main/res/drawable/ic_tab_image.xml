@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部栏「图片」页签图标。
+  不复用 material-icons-core：core 集合不含 Image 图标，引入 material-icons-extended
+  会让 APK 显著变大（该库含数千个图标），自绘 vector 成本最低。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!--
+      不声明 android:tint="?attr/colorControlNormal"：本项目主题继承平台 Material，
+      没有该 AppCompat 属性，资源链接会失败。
+      Compose 侧 Icon(painter=...) 会用 LocalContentColor 重新着色，这里的 fillColor 不生效。
+    -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M21,19V5c0,-1.1 -0.9,-2 -2,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2zM8.5,13.5l2.5,3.01L14.5,12l4.5,6H5l3.5,-4.5z" />
+</vector>

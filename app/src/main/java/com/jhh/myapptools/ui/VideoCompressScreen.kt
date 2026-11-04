@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -19,7 +18,6 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,7 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.media.VideoMetadata
 import com.jhh.myapptools.util.formatBytes
@@ -72,14 +69,28 @@ fun VideoCompressScreen(
     var inputBytes by remember { mutableStateOf(0L) }
 
     /** 默认 25MB（微信发视频的上限）；之后记忆上次使用值（C6） */
-    var targetMbText by remember {
-        mutableStateOf(AppPrefs.getString(context, AppPrefs.KEY_TARGET_VIDEO, "25"))
+    var targetMb by remember {
+        mutableFloatStateOf(
+            AppPrefs.getString(context, AppPrefs.KEY_TARGET_VIDEO, "25")
+                .toFloatOrNull()?.coerceAtLeast(0.1f) ?: 25f
+        )
     }
-    LaunchedEffect(targetMbText) {
-        // 空串不保存：否则清空输入后重启 App 会恢复成空值，"记忆上次使用值"失效
-        if (targetMbText.isNotBlank()) {
-            AppPrefs.setString(context, AppPrefs.KEY_TARGET_VIDEO, targetMbText)
-        }
+    LaunchedEffect(targetMb) {
+        AppPrefs.setString(context, AppPrefs.KEY_TARGET_VIDEO, targetMb.toString())
+    }
+
+    // 滑块上界跟随原片大小：目标比原片还大就没有压缩意义，直接把范围收到原片尺寸
+    val targetUpperMb = if (inputBytes > 0L) {
+        (inputBytes / 1_000_000f).coerceAtLeast(1f)
+    } else {
+        100f
+    }
+    val targetLowerMb = (targetUpperMb * 0.05f).coerceAtLeast(0.5f)
+    val targetRange = targetLowerMb..targetUpperMb
+
+    // 换了更小的视频时把值拉回区间，避免显示「设置 25MB / 原片 8MB」这种自相矛盾
+    LaunchedEffect(targetRange.start, targetRange.endInclusive) {
+        targetMb = targetMb.coerceIn(targetRange.start, targetRange.endInclusive)
     }
 
     /** 倍速：1f = 原速。>1 缩短时长，体积约按倍数缩小（画质基本不损） */
@@ -186,13 +197,12 @@ fun VideoCompressScreen(
 
     fun startCompress() {
         val input = inputFile ?: return
-        val targetMb = targetMbText.trim().toDoubleOrNull()
-        if (targetMb == null || targetMb <= 0) {
-            errorText = "目标大小必须是大于 0 的数字（MB）"
-            return
-        }
         // UI 标注 MB，内部按十进制 MB（1MB = 1,000,000 bytes）换算
         val targetBytes = (targetMb * 1_000_000).toLong()
+        if (targetBytes <= 0L) {
+            errorText = "目标大小无效，请重新拖动滑块"
+            return
+        }
         if (targetBytes >= inputBytes) {
             appendLog("目标不小于原文件，仍按阶梯尝试（首轮重编码可能有小幅收益）")
         }
@@ -202,7 +212,9 @@ fun VideoCompressScreen(
         stage = "准备中"
         result = null
         errorText = null
-        appendLog("开始压缩：目标 ${targetMb}MB（$targetBytes bytes），倍速 ${speedText(speed)}")
+        appendLog(
+            "开始压缩：目标 ${formatMb(targetMb)}（$targetBytes bytes），倍速 ${speedText(speed)}"
+        )
 
         val events = Channel<VideoCompressEvent>(Channel.UNLIMITED)
         scope.launch {
@@ -309,24 +321,32 @@ fun VideoCompressScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("目标大小与倍速", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
-                    value = targetMbText,
-                    onValueChange = { targetMbText = it.filter { c -> c.isDigit() || c == '.' } },
-                    label = { Text("目标大小（MB，十进制 1MB=1,000,000B）") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
+                ParamSlider(
+                    value = targetMb,
+                    onValueChange = { targetMb = it },
+                    valueRange = targetRange,
+                    leftLabel = if (inputBytes > 0L) {
+                        "原始 ${formatBytes(inputBytes)}"
+                    } else {
+                        "原始 --"
+                    },
+                    rightLabel = "设置 ${formatMb(targetMb)}",
                     enabled = !running,
-                    modifier = Modifier.fillMaxWidth(),
                 )
                 // 三个预设等分宽度 + 收窄内边距，避免「50MB」被挤成两行
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val presets = listOf("25" to "微信 25MB", "10" to "10MB", "50" to "50MB")
+                    val presets = listOf(25f to "微信 25MB", 10f to "10MB", 50f to "50MB")
                     presets.forEach { (value, label) ->
                         OutlinedButton(
-                            onClick = { targetMbText = value },
+                            onClick = {
+                                targetMb = value.coerceIn(
+                                    targetRange.start,
+                                    targetRange.endInclusive,
+                                )
+                            },
                             enabled = !running,
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
                             modifier = Modifier.weight(1f),

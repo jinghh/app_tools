@@ -32,7 +32,9 @@ internal fun copyUriToCache(context: Context, uri: Uri, subDir: String, fallback
     val safeName = sanitizeFileName(
         queryDisplayName(context, uri) ?: "input_${System.currentTimeMillis()}.$fallbackExt"
     )
-    val out = File(dir, safeName)
+    // 必须去重：批量导入不同目录下的同名文件（如两张 IMG_0001.jpg）时，
+    // 直接覆盖会让后一次处理把前一张的内容当成自己的输入，结果对不上号
+    val out = uniqueFile(dir, safeName)
     return runCatching {
         context.contentResolver.openInputStream(uri)?.use { input ->
             out.outputStream().use { output -> input.copyTo(output) }
@@ -42,6 +44,21 @@ internal fun copyUriToCache(context: Context, uri: Uri, subDir: String, fallback
         // 失败时清理半成品，不在缓存目录堆积
         runCatching { if (out.exists()) out.delete() }
     }.getOrNull()
+}
+
+/** 在 [dir] 下取一个不冲突的文件：name.ext → name_1.ext → name_2.ext ... */
+internal fun uniqueFile(dir: File, name: String): File {
+    val candidate = File(dir, name)
+    if (!candidate.exists()) return candidate
+    val ext = name.substringAfterLast('.', "")
+    val base = if (ext.isEmpty()) name else name.substringBeforeLast('.')
+    val suffix = if (ext.isEmpty()) "" else ".$ext"
+    var index = 1
+    while (true) {
+        val next = File(dir, "${base}_$index$suffix")
+        if (!next.exists()) return next
+        index++
+    }
 }
 
 /** 过滤文件系统非法字符，防止 DISPLAY_NAME 携带路径穿越字符 */
@@ -95,11 +112,53 @@ internal fun saveToPublicDownloads(context: Context, file: File, mime: String): 
     }.getOrNull()
 }
 
+/**
+ * 一键保存到系统相册（`Pictures/MyAppTools`）。
+ *
+ * 与 [saveToPublicDownloads] 同样的版本前提：MediaStore 免权限写入从 API 29 开始，
+ * 更低版本返回 null，由调用方提示改用「另存为」（SAF）。
+ * 阻塞 IO，调用方须在 Dispatchers.IO 上执行。
+ */
+internal fun saveToPublicPictures(context: Context, file: File, mime: String): Uri? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+    return runCatching {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                Environment.DIRECTORY_PICTURES + "/MyAppTools",
+            )
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: error("MediaStore 插入失败")
+        try {
+            resolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { it.copyTo(out) }
+            } ?: error("openOutputStream 返回 null")
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            uri
+        } catch (e: Exception) {
+            // 写入失败：清掉 pending 记录，不在相册里留 0 字节占位
+            runCatching { resolver.delete(uri, null, null) }
+            throw e
+        }
+    }.getOrNull()
+}
+
 /** MediaStore 需要的 MIME 类型；未知扩展名按通用二进制处理（仅影响系统归类，不影响内容） */
 internal fun mimeForFile(file: File): String = when (file.extension.lowercase(Locale.US)) {
     "mp4", "mov", "m4v" -> "video/mp4"
     "webm" -> "video/webm"
     "mkv" -> "video/x-matroska"
     "gif" -> "image/gif"
+    "jpg", "jpeg" -> "image/jpeg"
+    "png" -> "image/png"
+    "webp" -> "image/webp"
+    "heic", "heif" -> "image/heic"
     else -> "application/octet-stream"
 }

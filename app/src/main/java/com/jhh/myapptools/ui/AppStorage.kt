@@ -17,11 +17,13 @@ import java.io.File
 internal object AppStorage {
 
     private fun managedDirs(context: Context): List<File> = listOf(
-        YtDlpDownloader.outDir(context),      // 下载工作目录（.part 残留 + 尚未转移的成品）
-        YtDlpDownloader.finalDir(context),    // 下载成品长期目录
-        File(context.cacheDir, "gif-output"), // 转 GIF 产物
-        File(context.cacheDir, "video-input"),// SAF 导入的视频副本
-        File(context.cacheDir, "gif-input"),  // SAF 导入的 GIF 副本（含 compress-out）
+        YtDlpDownloader.outDir(context),       // 下载工作目录（.part 残留 + 尚未转移的成品）
+        YtDlpDownloader.finalDir(context),     // 下载成品长期目录
+        File(context.cacheDir, "gif-output"),  // 转 GIF 产物
+        File(context.cacheDir, "video-input"), // SAF 导入的视频副本
+        File(context.cacheDir, "gif-input"),   // SAF 导入的 GIF 副本（含 compress-out）
+        File(context.cacheDir, "image-input"), // SAF 导入的图片副本
+        File(context.cacheDir, "image-output"),// 图片压缩产物（按批次子目录组织）
     )
 
     fun totalBytes(context: Context): Long =
@@ -33,18 +35,56 @@ internal object AppStorage {
     fun clean(context: Context): Long {
         var freed = 0L
         managedDirs(context).forEach { dir ->
-            val files = dir.walkBottomUp().filter { it.isFile }.toList()
-            val keep = files.maxByOrNull { it.lastModified() }
-            files.forEach { f ->
-                if (f != keep) {
-                    val size = f.length()
-                    if (runCatching { f.delete() }.getOrDefault(false)) freed += size
-                }
-            }
-            // 清空的子目录（如 gif-input/compress-out）一并移除，walkBottomUp 已保证自底向上
-            dir.walkBottomUp().filter { it.isDirectory && it != dir }
-                .forEach { runCatching { it.delete() } }
+            freed += if (dir.name == IMAGE_OUTPUT_DIR) cleanBatchDir(dir) else cleanFlatDir(dir)
         }
         return freed
     }
+
+    /**
+     * 普通目录：保留最新修改的一个文件（即最近一次结果），其余删除。
+     * 适用于「一次操作产出一个文件」的模块。
+     */
+    private fun cleanFlatDir(dir: File): Long {
+        var freed = 0L
+        val files = dir.walkBottomUp().filter { it.isFile }.toList()
+        val keep = files.maxByOrNull { it.lastModified() }
+        files.forEach { f ->
+            if (f != keep) {
+                val size = f.length()
+                if (runCatching { f.delete() }.getOrDefault(false)) freed += size
+            }
+        }
+        // 清空的子目录（如 gif-input/compress-out）一并移除，walkBottomUp 已保证自底向上
+        dir.walkBottomUp().filter { it.isDirectory && it != dir }
+            .forEach { runCatching { it.delete() } }
+        return freed
+    }
+
+    /**
+     * 图片产物目录：按批次子目录（`batch_<时间戳>/`）组织，一批内是多张图。
+     * 不能套用「保留最新一个文件」，否则批量结果会被删到只剩 1 张；
+     * 这里保留**最新的整个批次**，其余批次整体删除。
+     */
+    private fun cleanBatchDir(dir: File): Long {
+        var freed = 0L
+        val batches = dir.listFiles()?.filter { it.isDirectory }.orEmpty()
+        val keep = batches.maxByOrNull { it.lastModified() }
+        batches.forEach { batch ->
+            if (batch != keep) {
+                batch.walkBottomUp().filter { it.isFile }.forEach { f ->
+                    val size = f.length()
+                    if (runCatching { f.delete() }.getOrDefault(false)) freed += size
+                }
+                runCatching { batch.delete() }
+            }
+        }
+        // 目录里散落的文件（异常中断留下的半成品）直接清掉
+        dir.listFiles()?.filter { it.isFile }?.forEach { f ->
+            val size = f.length()
+            if (runCatching { f.delete() }.getOrDefault(false)) freed += size
+        }
+        return freed
+    }
+
+    private const val IMAGE_OUTPUT_DIR = "image-output"
 }

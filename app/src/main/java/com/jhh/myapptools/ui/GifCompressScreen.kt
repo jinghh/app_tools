@@ -17,14 +17,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,14 +73,28 @@ fun GifCompressScreen(
     var inputBytes by remember { mutableStateOf(0L) }
 
     /** 默认 20MB（文档默认值）；之后记忆上次使用值（C6） */
-    var targetMbText by remember {
-        mutableStateOf(AppPrefs.getString(context, AppPrefs.KEY_TARGET_GIF, "20"))
+    var targetMb by remember {
+        mutableFloatStateOf(
+            AppPrefs.getString(context, AppPrefs.KEY_TARGET_GIF, "20")
+                .toFloatOrNull()?.coerceAtLeast(0.1f) ?: 20f
+        )
     }
-    LaunchedEffect(targetMbText) {
-        // 空串不保存：否则清空输入后重启 App 会恢复成空值，"记忆上次使用值"失效
-        if (targetMbText.isNotBlank()) {
-            AppPrefs.setString(context, AppPrefs.KEY_TARGET_GIF, targetMbText)
-        }
+    LaunchedEffect(targetMb) {
+        AppPrefs.setString(context, AppPrefs.KEY_TARGET_GIF, targetMb.toString())
+    }
+
+    // 滑块上界跟随原 GIF 大小：目标比原文件还大就没有压缩意义
+    val targetUpperMb = if (inputBytes > 0L) {
+        (inputBytes / 1_000_000f).coerceAtLeast(1f)
+    } else {
+        20f
+    }
+    // GIF 常只有几百 KB，下限给到 0.1MB 而不是 0.5MB
+    val targetLowerMb = (targetUpperMb * 0.05f).coerceAtLeast(0.1f)
+    val targetRange = targetLowerMb..targetUpperMb
+
+    LaunchedEffect(targetRange.start, targetRange.endInclusive) {
+        targetMb = targetMb.coerceIn(targetRange.start, targetRange.endInclusive)
     }
     /** 有损优先：保持帧率 / 尺寸 / 256 色不变，先降抖动与细节 */
     var lossyPreferred by remember { mutableStateOf(false) }
@@ -198,13 +210,12 @@ fun GifCompressScreen(
 
     fun startCompress() {
         val input = inputFile ?: return
-        val targetMb = targetMbText.trim().toDoubleOrNull()
-        if (targetMb == null || targetMb <= 0) {
-            errorText = "目标大小必须是大于 0 的数字（MB）"
-            return
-        }
         // 文档 3.3：UI 标注 MB，内部固定按十进制 MB（1 MB = 1,000,000 bytes）换算
         val targetBytes = (targetMb * 1_000_000).toLong()
+        if (targetBytes <= 0L) {
+            errorText = "目标大小无效，请重新拖动滑块"
+            return
+        }
         if (targetBytes >= inputBytes) {
             appendLog("目标大小不小于原始大小，仍按策略尝试（原参数重编码可能仍有收益）")
         }
@@ -214,7 +225,7 @@ fun GifCompressScreen(
         stage = "准备中"
         result = null
         errorText = null
-        appendLog("开始压缩：目标 ${targetMb}MB（${targetBytes} bytes）")
+        appendLog("开始压缩：目标 ${formatMb(targetMb)}（${targetBytes} bytes）")
 
         val events = Channel<GifCompressEvent>(Channel.UNLIMITED)
         scope.launch {
@@ -319,12 +330,16 @@ fun GifCompressScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("目标大小与策略", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
-                    value = targetMbText,
-                    onValueChange = { targetMbText = it.filter { c -> c.isDigit() || c == '.' } },
-                    label = { Text("目标大小（MB，十进制 1MB=1,000,000B）") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
+                ParamSlider(
+                    value = targetMb,
+                    onValueChange = { targetMb = it },
+                    valueRange = targetRange,
+                    leftLabel = if (inputBytes > 0L) {
+                        "原始 ${formatBytes(inputBytes)}"
+                    } else {
+                        "原始 --"
+                    },
+                    rightLabel = "设置 ${formatMb(targetMb)}",
                     enabled = !running,
                 )
 

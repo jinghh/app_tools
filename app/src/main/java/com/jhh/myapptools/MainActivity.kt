@@ -33,11 +33,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.download.UrlExtractor
 import com.jhh.myapptools.ui.DownloadScreen
 import com.jhh.myapptools.ui.GifCompressScreen
 import com.jhh.myapptools.ui.GifToolScreen
+import com.jhh.myapptools.ui.ImageCompressScreen
 import com.jhh.myapptools.ui.VideoCompressScreen
 import com.jhh.myapptools.ui.theme.AppTheme
 import java.io.File
@@ -101,11 +103,15 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_TAB = "extra_tab"
-        /** 页签按使用频率排序：X 下载（最常用，默认页）→ 视频转 GIF → GIF 压缩 → 视频压缩 */
+        /**
+         * 页签按使用频率排序：X 下载（最常用，默认页）→ 视频转 GIF → GIF 压缩 → 视频压缩 → 图片压缩。
+         * 已是 Material3 NavigationBar 的 5 项上限，再加功能需要改导航结构（抽屉或聚合页）。
+         */
         const val TAB_DOWNLOAD = 0
         const val TAB_GIF = 1
         const val TAB_COMPRESS = 2
         const val TAB_VIDEO_COMPRESS = 3
+        const val TAB_IMAGE_COMPRESS = 4
     }
 }
 
@@ -219,7 +225,20 @@ private fun MainScreen(
                     selected = tab == MainActivity.TAB_VIDEO_COMPRESS,
                     onClick = { tab = MainActivity.TAB_VIDEO_COMPRESS },
                     icon = { Icon(Icons.Filled.Build, contentDescription = null) },
-                    label = { Text("视频压缩") },
+                    label = { Text("视频压缩", maxLines = 1) },
+                )
+                NavigationBarItem(
+                    selected = tab == MainActivity.TAB_IMAGE_COMPRESS,
+                    onClick = { tab = MainActivity.TAB_IMAGE_COMPRESS },
+                    // material-icons-core 不含 Image 图标，用自绘 vector，避免引入
+                    // material-icons-extended（数千个图标，APK 显著变大）
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_tab_image),
+                            contentDescription = null,
+                        )
+                    },
+                    label = { Text("图片", maxLines = 1) },
                 )
             }
         },
@@ -257,7 +276,7 @@ private fun MainScreen(
                 onPreloadConsumed = { pendingGif = null },
             )
 
-            else -> VideoCompressScreen(
+            MainActivity.TAB_VIDEO_COMPRESS -> VideoCompressScreen(
                 modifier = Modifier.padding(padding),
                 preloadedVideo = pendingCompressVideo,
                 onPreloadConsumed = { pendingCompressVideo = null },
@@ -267,6 +286,8 @@ private fun MainScreen(
                     tab = MainActivity.TAB_GIF
                 },
             )
+
+            else -> ImageCompressScreen(modifier = Modifier.padding(padding))
         }
     }
 }
