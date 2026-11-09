@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  单色层（Android 13+ 主题图标）：系统会把这里的图形重新着色，
-  所以只保留形状、颜色无关紧要（用纯黑色是惯例）。
+  单色层（Android 13+ 主题图标）：系统只取形状并重新着色，颜色本身无关紧要。
+  必须与 ic_launcher_foreground.xml 保持同一图形，否则主题图标会变回旧符号。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -10,21 +10,20 @@
     android:viewportHeight="108">
 
     <path
-        android:pathData="M32,34 L76,34"
+        android:pathData="M40,30 C34.5,30 30,34.5 30,40 L30,68 C30,73.5 34.5,78 40,78"
+        android:fillColor="#00000000"
         android:strokeColor="#000000"
-        android:strokeWidth="11"
+        android:strokeWidth="9"
         android:strokeLineCap="round" />
 
     <path
-        android:pathData="M54,34 L54,58"
+        android:pathData="M68,30 C73.5,30 78,34.5 78,40 L78,68 C78,73.5 73.5,78 68,78"
+        android:fillColor="#00000000"
         android:strokeColor="#000000"
-        android:strokeWidth="11"
+        android:strokeWidth="9"
         android:strokeLineCap="round" />
 
     <path
-        android:pathData="M41,57 L54,74 L67,57"
-        android:strokeColor="#000000"
-        android:strokeWidth="11"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+        android:pathData="M46,40 L46,68 L70,54 Z"
+        android:fillColor="#000000" />
 </vector>

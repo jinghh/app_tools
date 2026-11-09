@@ -57,17 +57,12 @@ class DownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) {
             // 系统重启（START_STICKY）：进程被杀后服务重建，检查是否有可续传的下载。
-            // 用持久化的 URL + 按站点匹配的 Cookie/已保存的代理自动续传，无需用户干预。
+            // 用持久化的 URL + 按站点匹配的 Cookie 自动续传，无需用户干预。
             val url = YtDlpDownloader.resumeUrl(this)
             val hasPart = YtDlpDownloader.partialBytes(this) > 0L
             if (DownloadCenter.state.value.phase == DownloadPhase.IDLE && url != null && hasPart) {
                 val cookiePath = CookieStore(this).matchForUrl(url)?.file?.absolutePath
-                DownloadCenter.resumeAfterRestart(
-                    this,
-                    url,
-                    cookiePath,
-                    NetworkPrefs(this).normalizedProxyOrNull(),
-                )
+                DownloadCenter.resumeAfterRestart(this, url, cookiePath)
             } else if (DownloadCenter.state.value.phase == DownloadPhase.IDLE) {
                 // 重启后没有可恢复的工作：安静退出，不留一个空的前台通知。
                 // 必须 START_NOT_STICKY，否则会陷入"重启→退出→再重启"的循环。

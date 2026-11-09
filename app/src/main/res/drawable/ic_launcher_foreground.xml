@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  自适应图标前景层：一个「T 形 + 向下箭头」的融合符号。
-  - 横杠 = T（Tools / 工具箱）
-  - 竖杠末端收成箭头 = 下载 / 导入
-  用 stroke + round cap 画，比逐点描 path 更简洁，任意尺寸都保持圆润。
+  自适应图标前景层（方案 C「框中播放」）：
+  - 两片圆角括号 = 本地工具箱的「容器 / 处理」
+  - 中间播放三角 = 视频 / 媒体
+  纯几何、负空间干净；被系统裁成方 / 圆 / 水滴，或缩到 24dp 通知图标时仍可辨识。
+  与 ic_launcher_monochrome.xml、ic_notification.xml 使用同一套图形语言。
 
-  安全区：自适应图标只保证中心 72×72（108 视口内 18..90）不被裁切，
-  本图形的包围盒约为 x 26..82、y 28..82，落在安全区内。
+  安全区：自适应图标只保证中心 72×72（108 视口内 18..90）不被裁切。
+  计入 9 宽 stroke 后包围盒约 x 25.5..82.5、y 25.5..82.5，全部落在安全区内。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -14,25 +15,24 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 横杠 -->
+    <!-- 左括号 -->
     <path
-        android:pathData="M32,34 L76,34"
+        android:pathData="M40,30 C34.5,30 30,34.5 30,40 L30,68 C30,73.5 34.5,78 40,78"
+        android:fillColor="#00000000"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="11"
+        android:strokeWidth="9"
         android:strokeLineCap="round" />
 
-    <!-- 竖杠 -->
+    <!-- 右括号 -->
     <path
-        android:pathData="M54,34 L54,58"
+        android:pathData="M68,30 C73.5,30 78,34.5 78,40 L78,68 C78,73.5 73.5,78 68,78"
+        android:fillColor="#00000000"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="11"
+        android:strokeWidth="9"
         android:strokeLineCap="round" />
 
-    <!-- 箭头 -->
+    <!-- 播放三角 -->
     <path
-        android:pathData="M41,57 L54,74 L67,57"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="11"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+        android:pathData="M46,40 L46,68 L70,54 Z"
+        android:fillColor="#FFFFFF" />
 </vector>

@@ -16,9 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
@@ -42,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.gif.FfmpegGifEngine
 import com.jhh.myapptools.gif.GifToolPrefs
@@ -312,9 +309,16 @@ fun GifToolScreen(
     ScreenScaffold(
         modifier = modifier,
         title = "视频转 GIF",
+        titleExtra = {
+            HelpIcon(
+                title = "视频转 GIF",
+                text = "从本地视频截取片段转成 GIF，可调帧率、宽度、颜色数与抖动。\n\n" +
+                    "结果默认留在应用缓存里，完成后请点「保存 GIF」或「另存为」长期保留。",
+            )
+        },
     ) {
         // 导入视频
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -323,6 +327,7 @@ fun GifToolScreen(
                 Button(
                     onClick = { pickVideoLauncher.launch(arrayOf("video/*")) },
                     enabled = !running,
+                    modifier = Modifier.fillMaxWidth(),
                 ) { Text("从本地导入（SAF）") }
                 videoInfo?.let { info ->
                     Text(
@@ -347,7 +352,7 @@ fun GifToolScreen(
 
         // 2. 视频预览
         inputFile?.let { file ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -368,7 +373,7 @@ fun GifToolScreen(
         // 3. 截取区间
         videoInfo?.let { info ->
             val durationSec = info.durationMs / 1000f
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -380,6 +385,7 @@ fun GifToolScreen(
                         onValueChange = { startSec = it },
                         valueRange = 0f..durationSec,
                         enabled = !running,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     Text("终点：${endSec.toInt()}s", style = MaterialTheme.typography.bodyMedium)
                     Slider(
@@ -391,6 +397,7 @@ fun GifToolScreen(
                         },
                         valueRange = 0f..durationSec,
                         enabled = !running,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
                         "预计片段时长：${(endSec - startSec).toInt()}s",
@@ -401,7 +408,7 @@ fun GifToolScreen(
         }
 
         // 4. 编码参数与引擎选择
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -411,6 +418,7 @@ fun GifToolScreen(
                 // 画质预设（P2-12）：一键写入四项参数（随之被参数记忆保存），之后仍可单独微调
                 Text("画质预设", style = MaterialTheme.typography.bodyMedium)
                 FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -455,8 +463,9 @@ fun GifToolScreen(
                     enabled = !running,
                 ) { maxColors = it; persistParams() }
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text("Bayer 抖动", style = MaterialTheme.typography.bodyMedium)
                     Switch(
@@ -469,21 +478,22 @@ fun GifToolScreen(
         }
 
         // 执行
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("执行", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { startEncode() },
-                        enabled = !running && inputFile != null,
-                    ) { Text("开始转换") }
+                Button(
+                    onClick = { startEncode() },
+                    enabled = !running && inputFile != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("开始转换") }
+                if (running) {
                     OutlinedButton(
                         onClick = { engine.cancel() },
-                        enabled = running,
-                    ) { Text("取消") }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("取消（放弃等待）") }
                 }
                 if (running) {
                     LinearProgressIndicator(
@@ -498,27 +508,11 @@ fun GifToolScreen(
             }
         }
 
-        // 实际执行的命令（排查用）
-        if (ffmpegCommand.isNotEmpty()) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("ffmpeg 命令", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "ffmpeg $ffmpegCommand",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 6,
-                    )
-                }
-            }
-        }
+        // 实际执行的命令（排查用）已并入底部「诊断与日志」折叠区
 
         // 结果
         result?.let { r ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -540,31 +534,43 @@ fun GifToolScreen(
                             .clip(RoundedCornerShape(8.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            // 一键保存到系统「下载」目录（免权限）；SAF 保留为「另存为」（P2-6）
-                            Button(onClick = { quickSaveToDownloads(r.file) }) { Text("保存 GIF") }
-                            OutlinedButton(onClick = {
-                                pendingSave = r
-                                saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
-                            }) { Text("另存为…") }
+                            Button(
+                                onClick = { quickSaveToDownloads(r.file) },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("保存 GIF", maxLines = 1) }
+                            OutlinedButton(
+                                onClick = {
+                                    pendingSave = r
+                                    saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("另存为", maxLines = 1) }
                         } else {
-                            Button(onClick = {
-                                pendingSave = r
-                                saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
-                            }) { Text("保存 GIF") }
-                        }
-                        OutlinedButton(onClick = { onSendToCompress(r.file) }) {
-                            Text("压缩")
+                            Button(
+                                onClick = {
+                                    pendingSave = r
+                                    saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("保存 GIF", maxLines = 1) }
                         }
                     }
+                    OutlinedButton(
+                        onClick = { onSendToCompress(r.file) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("压缩") }
                 }
             }
         }
 
         // 错误与诊断
         errorText?.let { err ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -574,38 +580,19 @@ fun GifToolScreen(
                 }
             }
         }
-        diagnostics?.let { diag ->
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("诊断信息（开发用）", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        diag.takeLast(4000),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
+        // 命令 / 诊断 / 日志统一收进折叠区，展开后每块限高，不再把整页撑长
+        val logText = remember(logs) { logs.joinToString("\n") }
+        val diagBlocks = buildList {
+            if (ffmpegCommand.isNotEmpty()) {
+                add(DiagnosticsBlock("ffmpeg 命令", "ffmpeg $ffmpegCommand"))
             }
+            diagnostics?.let { add(DiagnosticsBlock("诊断信息", it.takeLast(4000))) }
+            if (logText.isNotEmpty()) add(DiagnosticsBlock("日志", logText))
         }
-
-        // 日志
-        if (logs.isNotEmpty()) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("日志", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        logs.joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-            }
-        }
+        DiagnosticsSection(
+            blocks = diagBlocks,
+            summary = "命令 / 诊断 / 日志，共 ${diagBlocks.size} 项",
+        )
     }
 }
 
@@ -617,10 +604,14 @@ private fun ChipRow(
     enabled: Boolean,
     onSelect: (Int) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         // FlowRow 自适应换行：选项超出可用宽度时自动折行，避免最后一个 Chip 被挤压变形
         FlowRow(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

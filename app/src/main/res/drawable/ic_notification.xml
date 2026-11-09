@@ -1,14 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
 <!--
-  通知栏小图标：必须是纯白/单色剪影（系统只取 alpha 通道着色），
-  因此不能复用彩色的应用图标 @mipmap/ic_launcher。
-  图形为 Material 风格的下载箭头 + 底座。
+  通知栏小图标：系统只取 alpha 通道着色，因此必须是纯白剪影，
+  不能复用彩色的 @mipmap/ic_launcher，也不能带渐变或彩色描边。
+
+  这是 108 视口「两片括号 + 播放三角」在 24dp 下的简化版：
+  括号收成一个圆角方框，播放三角保持不变 —— 与桌面图标同一套图形语言。
+  DownloadService 的两处 setSmallIcon(R.drawable.ic_notification) 因此无需改代码。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
+
+    <!-- 圆角方框（两片括号的简化） -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M19,9h-4V3H9v6H5l7,7 7,-7zM5,18v2h14v-2H5z" />
+        android:pathData="M7.5,2.5 L16.5,2.5 C19.26,2.5 21.5,4.74 21.5,7.5 L21.5,16.5 C21.5,19.26 19.26,21.5 16.5,21.5 L7.5,21.5 C4.74,21.5 2.5,19.26 2.5,16.5 L2.5,7.5 C2.5,4.74 4.74,2.5 7.5,2.5 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2" />
+
+    <!-- 播放三角 -->
+    <path
+        android:pathData="M9.5,7.5 L9.5,16.5 L17,12 Z"
+        android:fillColor="#FFFFFF" />
 </vector>

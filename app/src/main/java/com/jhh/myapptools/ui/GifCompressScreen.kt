@@ -15,9 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -37,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.gif.GifCompressEvent
@@ -296,6 +293,13 @@ fun GifCompressScreen(
     ScreenScaffold(
         modifier = modifier,
         title = "GIF 压缩",
+        titleExtra = {
+            HelpIcon(
+                title = "GIF 压缩",
+                text = "按「减色 → 降帧率 → 降分辨率」级联压缩到目标大小，每轮校验真实字节数。\n\n" +
+                    "原文件不会被覆盖；达到最低参数仍超限会明确提示未达标。",
+            )
+        },
     ) {
         Text(
             "导入任意 GIF，按策略级联压缩至目标大小；原文件不会被覆盖",
@@ -303,7 +307,7 @@ fun GifCompressScreen(
         )
 
         // 导入
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -312,6 +316,7 @@ fun GifCompressScreen(
                 Button(
                     onClick = { pickGifLauncher.launch(arrayOf("image/gif")) },
                     enabled = !running,
+                    modifier = Modifier.fillMaxWidth(),
                 ) { Text("从本地导入（SAF）") }
                 inputInfo?.let { info ->
                     Text(
@@ -324,7 +329,7 @@ fun GifCompressScreen(
         }
 
         // 2. 目标大小
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -370,21 +375,22 @@ fun GifCompressScreen(
         }
 
         // 执行
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("执行", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { startCompress() },
-                        enabled = !running && inputFile != null,
-                    ) { Text("开始压缩") }
+                Button(
+                    onClick = { startCompress() },
+                    enabled = !running && inputFile != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("开始压缩") }
+                if (running) {
                     OutlinedButton(
                         onClick = { compressor.cancel() },
-                        enabled = running,
-                    ) { Text("取消") }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("取消（放弃等待）") }
                 }
                 if (running) {
                     LinearProgressIndicator(
@@ -401,7 +407,7 @@ fun GifCompressScreen(
 
         // 结果
         result?.let { r ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -440,19 +446,30 @@ fun GifCompressScreen(
                             .clip(RoundedCornerShape(8.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            // 一键保存到系统「下载」目录（免权限）；SAF 保留为「另存为」（P2-6）
-                            Button(onClick = { quickSaveToDownloads(r.file) }) { Text("保存 GIF") }
-                            OutlinedButton(onClick = {
-                                pendingSave = r
-                                saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
-                            }) { Text("另存为…") }
+                            Button(
+                                onClick = { quickSaveToDownloads(r.file) },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("保存 GIF", maxLines = 1) }
+                            OutlinedButton(
+                                onClick = {
+                                    pendingSave = r
+                                    saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("另存为", maxLines = 1) }
                         } else {
-                            Button(onClick = {
-                                pendingSave = r
-                                saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
-                            }) { Text("保存 GIF") }
+                            Button(
+                                onClick = {
+                                    pendingSave = r
+                                    saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("保存 GIF", maxLines = 1) }
                         }
                     }
                 }
@@ -460,7 +477,7 @@ fun GifCompressScreen(
         }
 
         errorText?.let { err ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -471,21 +488,13 @@ fun GifCompressScreen(
             }
         }
 
-        if (logs.isNotEmpty()) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("日志", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        logs.joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-            }
-        }
+        val logText = remember(logs) { logs.joinToString("\n") }
+        DiagnosticsSection(
+            blocks = buildList {
+                if (logText.isNotEmpty()) add(DiagnosticsBlock("压缩轮次日志", logText))
+            },
+            summary = "压缩轮次日志 ${logs.size} 条",
+        )
     }
 }
 

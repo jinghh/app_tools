@@ -14,9 +14,9 @@ android {
         // minSdk 24 与 ffmpeg-kit / yt-dlp-android 维护分支要求对齐；两者均只发布 64 位 ABI
         minSdk = 24
         targetSdk = 35
-        // 0.2.0：新增图片压缩模块（批量、有损/无损/目标大小、尺寸与格式转换）
-        versionCode = 11
-        versionName = "0.2.0"
+        // 0.3.0：应用内登录自动获取 Cookie、下载与工具页 UI 重构、全新应用图标
+        versionCode = 12
+        versionName = "0.3.0"
 
         ndk {
             // 只保留 arm64-v8a（近几年真实手机均为此架构）。

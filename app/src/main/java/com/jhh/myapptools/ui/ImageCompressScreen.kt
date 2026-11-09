@@ -30,7 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -338,9 +337,19 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    ScreenScaffold(modifier = modifier, title = "图片压缩") {
+    ScreenScaffold(
+        modifier = modifier,
+        title = "图片压缩",
+        titleExtra = {
+            HelpIcon(
+                title = "图片压缩",
+                text = "批量导入图片，支持有损 / 无损 / 目标大小三种模式，可改尺寸与格式。\n\n" +
+                    "原图只读，产物默认留在应用缓存里，完成后请点「存到相册」或「另存为」长期保留。",
+            )
+        },
+    ) {
         // 1. 选择图片
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -349,6 +358,7 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
                 Button(
                     onClick = { pickLauncher.launch(arrayOf("image/*")) },
                     enabled = !running && !importing,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (importing) "导入中…" else "从本地导入（可多选）")
                 }
@@ -393,7 +403,7 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
         }
 
         // 2. 压缩设置
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -565,24 +575,25 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
         }
 
         // 3. 执行
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("执行", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { startCompress() },
-                        enabled = !running && !importing && items.isNotEmpty(),
-                    ) { Text("开始压缩") }
+                Button(
+                    onClick = { startCompress() },
+                    enabled = !running && !importing && items.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("开始压缩") }
+                if (running) {
                     OutlinedButton(
                         onClick = {
                             compressor.cancel()
                             appendLog("已请求取消，当前图片处理完即停止")
                         },
-                        enabled = running,
-                    ) { Text("取消") }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("取消（放弃等待）") }
                 }
                 if (running) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -593,7 +604,7 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
 
         // 4. 结果
         summary?.let { s ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -606,16 +617,6 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
                             "用时 ${s.elapsedMs}ms",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    results.forEach { r ->
-                        Text(
-                            "${r.file.name}\n" +
-                                "  ${r.srcWidth}x${r.srcHeight} → ${r.outWidth}x${r.outHeight}" +
-                                " · ${r.format.displayName}\n" +
-                                "  ${formatBytes(r.originalBytes)} → ${formatBytes(r.outputBytes)}" +
-                                "（${signedPercent(r.savedPercent)}）· ${r.finalLabel}",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
                     if (!results.all { it.metTarget }) {
                         Text(
                             "部分图片未达标：已保留最低参数下的最佳结果",
@@ -623,28 +624,18 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    if (failures.isNotEmpty()) {
-                        Text(
-                            failures.joinToString("\n") { "${it.first}：${it.second}" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
 
-                    val actionPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
                             onClick = { saveToGallery(results) },
-                            contentPadding = actionPadding,
                             modifier = Modifier.weight(1f),
                         ) { Text("存到相册", maxLines = 1) }
                         if (results.size == 1) {
                             OutlinedButton(
                                 onClick = { launchSaveAs(results.first()) },
-                                contentPadding = actionPadding,
                                 modifier = Modifier.weight(1f),
                             ) { Text("另存为", maxLines = 1) }
                         }
@@ -653,8 +644,34 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
             }
         }
 
+        // 批量结果明细默认折叠，避免最多 30 条把整页撑到无限长
+        if (results.isNotEmpty() || failures.isNotEmpty()) {
+            CollapsibleSection(
+                title = "处理明细",
+                summary = "成功 ${results.size} 张 · 失败 ${failures.size} 项",
+            ) {
+                results.forEach { r ->
+                    Text(
+                        "${r.file.name}\n" +
+                            "  ${r.srcWidth}x${r.srcHeight} → ${r.outWidth}x${r.outHeight}" +
+                            " · ${r.format.displayName}\n" +
+                            "  ${formatBytes(r.originalBytes)} → ${formatBytes(r.outputBytes)}" +
+                            "（${signedPercent(r.savedPercent)}）· ${r.finalLabel}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (failures.isNotEmpty()) {
+                    Text(
+                        failures.joinToString("\n") { "${it.first}：${it.second}" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+
         errorText?.let { err ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -665,21 +682,13 @@ fun ImageCompressScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        if (logs.isNotEmpty()) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("日志", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        logs.joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-            }
-        }
+        val logText = remember(logs) { logs.joinToString("\n") }
+        DiagnosticsSection(
+            blocks = buildList {
+                if (logText.isNotEmpty()) add(DiagnosticsBlock("处理日志", logText))
+            },
+            summary = "处理日志 ${logs.size} 条",
+        )
     }
 }
 

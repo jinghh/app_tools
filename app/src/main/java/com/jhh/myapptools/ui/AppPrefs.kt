@@ -5,11 +5,11 @@ import android.content.Context
 /**
  * 界面层的轻量偏好（只存字符串，够用即可）。
  *
- * 为什么不并到 `NetworkPrefs`：那个类语义是"网络设置"（代理），
+ * 为什么不并到 `NotificationPrefs`：那个类语义是"通知设置"，
  * 把"上次用的目标大小"塞进去会让职责变混。
  *
  * 已持久化的东西盘点：
- * - 代理地址 / 通知开关 → `NetworkPrefs` / `NotificationPrefs`
+ * - 通知开关 → `NotificationPrefs`
  * - 转 GIF 的 fps/宽度/色数/抖动 → `GifToolPrefs`
  * - 是否携带 Cookie → `CookieStore`
  * - **目标大小（本类，C6）** —— 每次压缩都要重填一个数字，属于高频重复输入

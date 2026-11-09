@@ -82,10 +82,45 @@ internal class CookieStore(private val context: Context) {
         val entries = list()
         if (entries.isEmpty()) return null
 
-        HOST_ALIASES[host]?.let { aliased ->
-            entries.firstOrNull { it.platform == aliased }?.let { return it }
-        }
+        val aliased = aliasedHost(host)
+        entries.firstOrNull { it.platform == aliased }?.let { return it }
         return entries.firstOrNull { host == it.platform || host.endsWith("." + it.platform) }
+    }
+
+    /**
+     * 从目标链接推导归一化注册域（供「应用内登录」决定把 Cookie 存到哪个文件）。
+     *
+     * 必须先过 [HOST_ALIASES]：小红书分享的是 `xhslink.cn` 短链，若按它存成
+     * `xhslink.cn.txt`，[matchForUrl] 查的却是 `xiaohongshu.com.txt` ——
+     * 登录成功也会匹配不上，重下依旧不带 Cookie。
+     */
+    fun platformOfUrl(url: String): String? {
+        val host = hostOf(url) ?: return null
+        return baseDomain(aliasedHost(host)).takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * 把已生成的 Netscape 文本按指定平台落盘（应用内登录路径）。
+     *
+     * 平台由调用方用 [platformOfUrl] 算好后固定传入，**不再**从文本内容反推：
+     * WebView 导出的 cookie domain 统一写父域，再跑一次 `detectPlatform` 只会得到同一个值，
+     * 却会让短链归一化这一步被绕过。
+     */
+    fun saveForPlatform(platform: String, text: String): ImportResult {
+        if (text.isBlank()) return ImportResult.Failure("Cookie 内容为空")
+        val normalized = baseDomain(platform)
+        if (normalized.isBlank()) return ImportResult.Failure("无法识别站点")
+
+        return writeAtomically(File(dir, "$normalized.txt"), text).fold(
+            onSuccess = { file ->
+                ImportResult.Success(
+                    Entry(normalized, displayNameOf(normalized), file, file.length())
+                )
+            },
+            onFailure = {
+                ImportResult.Failure("写入失败：${it.message ?: it.javaClass.simpleName}")
+            },
+        )
     }
 
     /** 从 SAF 选择的文件导入；平台由文件内容自动识别 */
@@ -102,23 +137,27 @@ internal class CookieStore(private val context: Context) {
         val platform = detectPlatform(text)
             ?: return ImportResult.Failure("无法从文件中识别站点，请确认是浏览器导出的 Netscape cookies.txt")
 
-        val file = File(dir, "$platform.txt")
-        return try {
-            file.writeText(text)
-            val entry = Entry(platform, displayNameOf(platform), file, file.length())
-            // Netscape 格式首行通常为 "# Netscape HTTP Cookie File" / "# HTTP Cookie File"
-            val looksNetscape = text.lineSequence().take(5).any {
-                it.contains("Netscape HTTP Cookie File", ignoreCase = true) ||
-                    it.contains("HTTP Cookie File", ignoreCase = true)
-            }
-            if (looksNetscape) {
-                ImportResult.Success(entry)
-            } else {
-                ImportResult.Warning(entry, "已导入，但文件不像标准 Netscape 格式，可能不被 yt-dlp 识别")
-            }
-        } catch (e: Exception) {
-            ImportResult.Failure("写入失败：${e.message ?: e.javaClass.simpleName}")
-        }
+        return writeAtomically(File(dir, "$platform.txt"), text).fold(
+            onSuccess = { file ->
+                val entry = Entry(platform, displayNameOf(platform), file, file.length())
+                // Netscape 格式首行通常为 "# Netscape HTTP Cookie File" / "# HTTP Cookie File"
+                val looksNetscape = text.lineSequence().take(5).any {
+                    it.contains("Netscape HTTP Cookie File", ignoreCase = true) ||
+                        it.contains("HTTP Cookie File", ignoreCase = true)
+                }
+                if (looksNetscape) {
+                    ImportResult.Success(entry)
+                } else {
+                    ImportResult.Warning(
+                        entry,
+                        "已导入，但文件不像标准 Netscape 格式，可能不被 yt-dlp 识别",
+                    )
+                }
+            },
+            onFailure = {
+                ImportResult.Failure("写入失败：${it.message ?: it.javaClass.simpleName}")
+            },
+        )
     }
 
     // ---------- 内部 ----------
@@ -130,7 +169,7 @@ internal class CookieStore(private val context: Context) {
         val text = runCatching { legacy.readText() }.getOrNull() ?: return
         val platform = detectPlatform(text) ?: return
         runCatching {
-            File(dir, "$platform.txt").writeText(text)
+            writeAtomically(File(dir, "$platform.txt"), text).getOrThrow()
             legacy.delete()
         }
     }
@@ -157,7 +196,7 @@ internal class CookieStore(private val context: Context) {
         return runCatching { URI(withScheme).host?.lowercase() }.getOrNull()
     }
 
-    private companion object {
+    companion object {
         const val COOKIE_DIR = "cookies"
         const val LEGACY_FILE = "cookies.txt"
         const val HTTP_ONLY_PREFIX = "#HttpOnly_"
@@ -192,10 +231,47 @@ internal class CookieStore(private val context: Context) {
             "fb.com" to "facebook.com",
             "b23.tv" to "bilibili.com",
             "v.douyin.com" to "douyin.com",
+            "iesdouyin.com" to "douyin.com",
             "youtu.be" to "youtube.com",
         )
 
+        /**
+         * 短链别名查找：先按完整 host，再按去掉 `www.` 的 host。
+         * 这样 `www.iesdouyin.com`、`www.b23.tv` 这类带 www 的分享域名也能命中，
+         * 不会出现「存成 douyin.com.txt、查的却是 iesdouyin.com」的错配。
+         */
+        fun aliasedHost(host: String): String {
+            val bare = host.removePrefix("www.")
+            return HOST_ALIASES[host] ?: HOST_ALIASES[bare] ?: host
+        }
+
         fun displayNameOf(platform: String): String = DISPLAY_NAMES[platform] ?: platform
+
+        /**
+         * 原子写入：先写 `.tmp` 再 rename，避免下载进行中读到半截 Cookie 文件。
+         * 导入（SAF）与应用内登录（WebView）共用，保证两条路径行为一致。
+         */
+        internal fun writeAtomically(target: File, text: String): Result<File> = runCatching {
+            val parent = target.parentFile ?: error("Cookie 目录无效")
+            parent.mkdirs()
+            val tmp = File(parent, "${target.name}.tmp")
+            // .bak 不以 .txt 结尾，不会被 list() 误认成一个已导入平台
+            val backup = File(parent, "${target.name}.bak")
+            tmp.writeText(text, Charsets.UTF_8)
+
+            // 先把旧文件挪到 .bak（而不是直接删），再让 tmp 上位：
+            // 第二步失败时可以把旧的挪回来，避免「旧 Cookie 删了、新的也没写成」。
+            // 部分厂商的 renameTo 不允许覆盖已存在文件，这一步也是它们的兼容路径。
+            backup.delete()
+            val hadOld = target.exists() && target.renameTo(backup)
+            if (!tmp.renameTo(target)) {
+                if (hadOld) backup.renameTo(target)
+                tmp.delete()
+                error("写入 Cookie 文件失败")
+            }
+            backup.delete()
+            target
+        }
 
         /** www.xiaohongshu.com / .xiaohongshu.com → xiaohongshu.com */
         fun baseDomain(raw: String): String {

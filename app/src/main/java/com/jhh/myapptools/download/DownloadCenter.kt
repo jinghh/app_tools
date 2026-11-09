@@ -26,6 +26,10 @@ data class DownloadUiState(
     val meta: VideoMetadata.Info? = null,
     val error: String? = null,
     val diagnostics: String? = null,
+    /** 本次失败的结构化原因：界面据此决定是否提供「应用内登录并导入 Cookie」入口 */
+    val failureReason: FailureReason? = null,
+    /** 本次下载实际使用的链接：登录返回后重试要用它，不依赖输入框的 remember 状态 */
+    val url: String? = null,
     val logs: List<String> = emptyList(),
     /** 中断残留的半成品大小（>0 时可「继续下载」） */
     val resumableBytes: Long = 0L,
@@ -68,30 +72,27 @@ object DownloadCenter {
      * 启动下载（用户点「开始下载 / 继续下载」）。必须在 App 处于前台时调用
      * （Android 12+ 禁止从后台启动前台服务），本方法会同时把前台服务拉起来。
      * @param cookiePath 按目标站点匹配到的 cookies.txt 路径（未匹配/已关闭则为 null）
-     * @param proxy      可选代理地址；null 表示不显式指定
      * @param resume     true = 续传（保留上次的 .part 接着下）；false = 重新下载（先清掉残留）
      */
     fun start(
         context: Context,
         url: String,
         cookiePath: String?,
-        proxy: String? = null,
         resume: Boolean = false,
-    ) = begin(context, url, cookiePath, proxy, resume, promoteService = true)
+    ) = begin(context, url, cookiePath, resume, promoteService = true)
 
     /**
      * 进程被系统杀死后，由重启的 [DownloadService] 调用：用持久化的续传 URL 自动恢复下载。
      * 服务本身已在前台，**不得**再次调用 startForegroundService（Android 12+ 的后台启动限制），
      * 故走 promoteService = false。
      */
-    fun resumeAfterRestart(context: Context, url: String, cookiePath: String?, proxy: String?) =
-        begin(context, url, cookiePath, proxy, resume = true, promoteService = false)
+    fun resumeAfterRestart(context: Context, url: String, cookiePath: String?) =
+        begin(context, url, cookiePath, resume = true, promoteService = false)
 
     private fun begin(
         context: Context,
         url: String,
         cookiePath: String?,
-        proxy: String?,
         resume: Boolean,
         promoteService: Boolean,
     ) {
@@ -106,14 +107,14 @@ object DownloadCenter {
         _state.value = DownloadUiState(
             phase = DownloadPhase.RUNNING,
             stage = "下载中…（首次需初始化 Python 运行时，可能较慢）",
-            // 明确记录本次实际用了什么凭证/代理，便于出问题时从日志判断
+            url = url,
+            // 明确记录本次实际用了什么凭证，便于出问题时从日志判断
             logs = buildList {
                 add(if (resume) "继续下载（续传）：$url" else "开始下载：$url")
                 add(
                     cookiePath?.let { "Cookie：使用 ${File(it).name.removeSuffix(".txt")}" }
                         ?: "Cookie：未使用"
                 )
-                proxy?.takeIf { it.isNotBlank() }?.let { add("代理：$it") }
             },
         )
 
@@ -132,7 +133,7 @@ object DownloadCenter {
 
         scope.launch {
             try {
-                engine.download(url, cookiePath, proxy, resume) { handleEvent(it) }
+                engine.download(url, cookiePath, resume) { handleEvent(it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -141,6 +142,7 @@ object DownloadCenter {
                     DownloadEvent.Failure(
                         "下载异常：${e.message ?: e.javaClass.simpleName}",
                         e.stackTraceToString(),
+                        FailureReason.UNKNOWN,
                     )
                 )
             }
@@ -215,6 +217,7 @@ object DownloadCenter {
                     stage = "失败",
                     error = event.message,
                     diagnostics = event.diagnostics,
+                    failureReason = event.reason,
                     logs = (s.logs + "失败：${event.message}").takeLast(MAX_LOGS),
                 )
 

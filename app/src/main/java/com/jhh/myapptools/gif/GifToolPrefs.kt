@@ -5,7 +5,7 @@ import android.content.Context
 /**
  * 转换参数记忆：把用户上次调过的 fps / 宽度 / 颜色数 / 抖动存下来，下次进页面直接恢复，
  * 免去每次重调（画质预设也以此为基础：预设给起点，手动微调后成为新的记忆值）。
- * 沿用 NetworkPrefs / NotificationPrefs 的 SharedPreferences 模式。
+ * 沿用 NotificationPrefs / CookieStore 的 SharedPreferences 模式。
  */
 internal class GifToolPrefs(context: Context) {
 

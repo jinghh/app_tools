@@ -59,6 +59,19 @@
             </intent-filter>
         </activity>
 
+        <!--
+          应用内登录页：WebView 登录目标站点后自动导出 Cookie，不对外暴露。
+          configChanges 避免横竖屏切换重建 Activity —— 重建会重新 loadUrl、
+          丢失已收集的 host，导致登录成功却读不到 Cookie。
+        -->
+        <activity
+            android:name=".ui.LoginCookieActivity"
+            android:exported="false"
+            android:label="@string/login_title"
+            android:parentActivityName=".MainActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+
         <!-- 下载前台服务：把进程保持在前台，避免退到后台被冻结/回收 -->
         <service
             android:name=".download.DownloadService"

@@ -5,13 +5,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
@@ -29,7 +28,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.media.VideoMetadata
 import com.jhh.myapptools.util.formatBytes
@@ -292,9 +290,16 @@ fun VideoCompressScreen(
     ScreenScaffold(
         modifier = modifier,
         title = "视频压缩",
+        titleExtra = {
+            HelpIcon(
+                title = "视频压缩",
+                text = "按「码率 → 分辨率 → 帧率」级联压缩到目标大小，可选倍速。\n\n" +
+                    "原视频不会被覆盖；结果默认留在应用缓存里，完成后请点「存到下载」或「另存为」长期保留。",
+            )
+        },
     ) {
         // 导入
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -303,6 +308,7 @@ fun VideoCompressScreen(
                 Button(
                     onClick = { pickVideoLauncher.launch(arrayOf("video/*")) },
                     enabled = !running,
+                    modifier = Modifier.fillMaxWidth(),
                 ) { Text("从本地导入（SAF）") }
                 inputInfo?.let { info ->
                     Text(
@@ -315,7 +321,7 @@ fun VideoCompressScreen(
         }
 
         // 2. 目标大小
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -358,7 +364,8 @@ fun VideoCompressScreen(
 
                 // 倍速：缩短时长 → 体积约按倍数缩小，且画质基本不损（每帧分到的比特不变）
                 Text("倍速", style = MaterialTheme.typography.bodyMedium)
-                Row(
+                // FlowRow 自适应换行，避免 5 个倍速按钮挤一行导致文字被压扁
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -368,16 +375,12 @@ fun VideoCompressScreen(
                             Button(
                                 onClick = { speed = option },
                                 enabled = !running,
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
-                                modifier = Modifier.weight(1f),
-                            ) { Text(label, maxLines = 1, softWrap = false) }
+                            ) { Text(label, maxLines = 1) }
                         } else {
                             OutlinedButton(
                                 onClick = { speed = option },
                                 enabled = !running,
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
-                                modifier = Modifier.weight(1f),
-                            ) { Text(label, maxLines = 1, softWrap = false) }
+                            ) { Text(label, maxLines = 1) }
                         }
                     }
                 }
@@ -397,21 +400,22 @@ fun VideoCompressScreen(
         }
 
         // 执行
-        Card {
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("执行", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { startCompress() },
-                        enabled = !running && inputFile != null,
-                    ) { Text("开始压缩") }
+                Button(
+                    onClick = { startCompress() },
+                    enabled = !running && inputFile != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("开始压缩") }
+                if (running) {
                     OutlinedButton(
                         onClick = { compressor.cancel() },
-                        enabled = running,
-                    ) { Text("取消") }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("取消（放弃等待）") }
                 }
                 if (running) {
                     LinearProgressIndicator(
@@ -428,7 +432,7 @@ fun VideoCompressScreen(
 
         // 结果
         result?.let { r ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -451,15 +455,13 @@ fun VideoCompressScreen(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    // 两个保存类按钮等分宽度 + 收窄内边距，避免文字被挤成竖排
-                    val actionPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    // 两个保存按钮等分宽度，下一行动作单独占一行
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
                             onClick = { quickSaveToDownloads(r.file) },
-                            contentPadding = actionPadding,
                             modifier = Modifier.weight(1f),
                         ) { Text("存到下载", maxLines = 1) }
                         OutlinedButton(
@@ -469,14 +471,12 @@ fun VideoCompressScreen(
                                     "compressed_${System.currentTimeMillis()}.mp4"
                                 )
                             },
-                            contentPadding = actionPadding,
                             modifier = Modifier.weight(1f),
                         ) { Text("另存为", maxLines = 1) }
                     }
-                    // 压缩成功后的下一步：底部一键转 GIF（免去手动保存再导入）
+                    // 压缩成功后的下一步：一键转 GIF（免去手动保存再导入）
                     FilledTonalButton(
                         onClick = { onSendToGif(r.file) },
-                        contentPadding = actionPadding,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("转 GIF") }
                 }
@@ -484,7 +484,7 @@ fun VideoCompressScreen(
         }
 
         errorText?.let { err ->
-            Card {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -495,21 +495,13 @@ fun VideoCompressScreen(
             }
         }
 
-        if (logs.isNotEmpty()) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("日志", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        logs.joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-            }
-        }
+        val logText = remember(logs) { logs.joinToString("\n") }
+        DiagnosticsSection(
+            blocks = buildList {
+                if (logText.isNotEmpty()) add(DiagnosticsBlock("压缩轮次日志", logText))
+            },
+            summary = "压缩轮次日志 ${logs.size} 条",
+        )
     }
 }
 

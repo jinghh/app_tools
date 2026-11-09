@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">本地工具箱</string>
+    <string name="login_title">站点登录</string>
 </resources>

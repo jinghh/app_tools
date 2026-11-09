@@ -48,12 +48,10 @@ class YtDlpDownloader(private val context: Context) {
     /**
      * 下载到应用私有缓存目录（成品成功后转移到 [Companion.finalDir]）。
      * @param cookiePath 按目标站点匹配到的 Netscape cookies.txt 路径（未匹配则 null）
-     * @param proxy      可选代理地址（如 http://10.0.0.2:7890）；null 表示不显式指定
      */
     fun download(
         url: String,
         cookiePath: String?,
-        proxy: String?,
         resume: Boolean = false,
         onEvent: (DownloadEvent) -> Unit,
     ) {
@@ -78,35 +76,40 @@ class YtDlpDownloader(private val context: Context) {
             onEvent(DownloadEvent.Stage("初始化 Python 运行时…"))
             ensureInit()
         } catch (e: YtDlpException) {
-            onEvent(DownloadEvent.Failure("Python 运行时初始化失败", e.stackTraceToString()))
+            onEvent(
+                DownloadEvent.Failure(
+                    "Python 运行时初始化失败",
+                    e.stackTraceToString(),
+                    FailureReason.UNKNOWN,
+                )
+            )
             return
         }
 
         onEvent(DownloadEvent.Stage("下载中…"))
-        val request = YtDlpRequest(url)
-            .addOption("--no-playlist")
-            .addOption("--no-warnings")
-            // 取单文件最佳格式（X 通常为单一 mp4）；避免依赖外部 ffmpeg 做音视频合并
-            .addOption("-f", "b")
-            // 文件名用视频标题（截 80 字符，缺标题回退 id；yt-dlp 会自动消毒非法字符）
-            .setOutputTemplate(File(outDir, OUTPUT_TEMPLATE).absolutePath)
 
-        // 需要登录态的站点（小红书、微博等）使用用户自己导入的 Cookie
-        cookiePath?.takeIf { it.isNotBlank() }?.let { path ->
-            request.addOption("--cookies", path)
+        /** 同一组参数、只换 `-f`：主用单一最佳格式，格式落空时降级到 yt-dlp 默认组合 */
+        fun buildRequest(format: String): YtDlpRequest {
+            val r = YtDlpRequest(url)
+                .addOption("--no-playlist")
+                .addOption("--no-warnings")
+                .addOption("-f", format)
+                // 文件名用视频标题（截 80 字符，缺标题回退 id；yt-dlp 会自动消毒非法字符）
+                .setOutputTemplate(File(outDir, OUTPUT_TEMPLATE).absolutePath)
+
+            // 需要登录态的站点（小红书、微博等）使用用户自己导入的 Cookie
+            cookiePath?.takeIf { it.isNotBlank() }?.let { r.addOption("--cookies", it) }
+            return r
         }
 
-        // 内嵌 Python 读不到 Android 的系统代理设置，必须显式传 --proxy
-        // （--proxy 在 yt-dlp 运行器的参数白名单内，已核实）
-        proxy?.takeIf { it.isNotBlank() }?.let { value ->
-            request.addOption("--proxy", value)
-        }
+        var activeRequest = buildRequest(DEFAULT_FORMAT)
+        var formatFallbackUsed = false
 
         // 链路类失败（连接被拒/重置/超时/DNS/TLS）自动用同一 URL 续传重试——
         // .part 已保留，重试只下载剩余字节；限流/登录/链接本身的问题不重试。
         var attempt = 0
         while (true) {
-            when (val terminal = runOnce(request, onEvent)) {
+            when (val terminal = runOnce(activeRequest, onEvent)) {
                 is DownloadEvent.Downloaded -> {
                     // 成功：.part 已被 yt-dlp 重命名为成品，续传标记随之失效。
                     //
@@ -135,6 +138,23 @@ class YtDlpDownloader(private val context: Context) {
                 }
 
                 is DownloadEvent.Failure -> {
+                    // 格式选择器落空：B 站等 DASH 站点没有「单一格式」可给 -f b 挑。
+                    // 换用 yt-dlp 默认的「最佳视频流 + 最佳音频流 / 单一最佳」再试一次；
+                    // 只降级一次、不占网络重试名额，避免无限循环。
+                    if (!formatFallbackUsed && isFormatNotAvailable(terminal)) {
+                        formatFallbackUsed = true
+                        // 第一次尝试可能留下分离流/半成品；格式都换了，续传没意义，
+                        // 不清掉的话 runOnce 会按 mtime 把旧文件误当成本次结果
+                        clear(context)
+                        activeRequest = buildRequest(FALLBACK_FORMAT)
+                        onEvent(DownloadEvent.Stage("当前格式不可用，改用兼容格式重试…"))
+                        onEvent(
+                            DownloadEvent.Log(
+                                "兼容格式允许音视频分离流；内嵌环境无 ffmpeg 时产物可能不含声音"
+                            )
+                        )
+                        continue
+                    }
                     attempt++
                     if (attempt <= MAX_AUTO_RETRIES && isTransientNetworkError(terminal)) {
                         onEvent(
@@ -192,7 +212,8 @@ class YtDlpDownloader(private val context: Context) {
             if (cancelled) return DownloadEvent.Cancelled
             if (!response.isSuccess) {
                 val diag = diagnostics()
-                return DownloadEvent.Failure(friendlyMessage(diag, response.exitCode), diag)
+                val friendly = friendlyMessage(diag, response.exitCode)
+                return DownloadEvent.Failure(friendly.message, diag, friendly.reason)
             }
             val file = outDir(context).listFiles()
                 // .part 是没写完的半成品，绝不能当成本次结果挑走
@@ -202,7 +223,11 @@ class YtDlpDownloader(private val context: Context) {
                 // 用户默认期望拿到第一个；此前取 newest 会拿到 #2。
                 ?.minByOrNull { it.lastModified() }
             if (file == null) {
-                DownloadEvent.Failure("下载完成但未找到输出文件", diagnostics())
+                DownloadEvent.Failure(
+                    "下载完成但未找到输出文件",
+                    diagnostics(),
+                    FailureReason.UNKNOWN,
+                )
             } else {
                 DownloadEvent.Downloaded(file)
             }
@@ -222,7 +247,8 @@ class YtDlpDownloader(private val context: Context) {
             .filter { it.isNotEmpty() }
             .joinToString("\n")
             .ifEmpty { null }
-        return DownloadEvent.Failure(friendlyMessage("$raw\n${diag.orEmpty()}", -1), merged)
+        val friendly = friendlyMessage(merged ?: raw, -1)
+        return DownloadEvent.Failure(friendly.message, merged, friendly.reason)
     }
 
     /**
@@ -249,65 +275,112 @@ class YtDlpDownloader(private val context: Context) {
     }
 
     /**
+     * 格式选择器落空：B 站等站点默认返回 DASH 分离流，而 `-f b`(best) 只挑单一格式，
+     * 于是报 "Requested format is not available"。
+     * 判断用 yt-dlp 的原始 diagnostics，不依赖已被翻译成中文的 [friendlyMessage]。
+     */
+    private fun isFormatNotAvailable(failure: DownloadEvent.Failure): Boolean =
+        FORMAT_UNAVAILABLE_PATTERN.containsMatchIn(failure.diagnostics.orEmpty())
+
+    /**
      * 把 yt-dlp 的英文报错翻译成面向用户的中文提示（PRD 3.1：不直接暴露内部报错）。
      * 依据 yt-dlp 的已知报错文本归类；无匹配时保留退出码与原始信息，不臆测原因。
+     *
+     * 同时产出 [FailureReason]，界面据此决定是否提供「应用内登录并导入 Cookie」入口。
+     * 分类必须**保守**：`LOGIN_REQUIRED` 只在诊断里有明确的登录跳转特征时给出，
+     * 否则 YouTube 之类「403 = TLS 指纹/JS 挑战」的失败会被误判成需要登录，
+     * 弹一个登录后仍然 403 的 WebView，用户陷入死循环。
      */
-    private fun friendlyMessage(diagnostics: String?, exitCode: Int): String {
+    private fun friendlyMessage(diagnostics: String?, exitCode: Int): FriendlyError {
         val text = (diagnostics ?: "").lowercase()
         return when {
-            "no video could be found" in text ->
-                "该帖子中没有找到视频。可能只有图片/文字，或视频位于被引用的帖子中。"
+            "no video could be found" in text -> FriendlyError(
+                "该帖子中没有找到视频。可能只有图片/文字，或视频位于被引用的帖子中。",
+                FailureReason.NO_VIDEO,
+            )
 
-            "impersonation" in text || "fingerprint" in text ->
-                "该站点要求 TLS 指纹伪装，当前免费版解析库不支持。"
+            "impersonation" in text || "fingerprint" in text -> FriendlyError(
+                "该站点要求 TLS 指纹伪装，当前免费版解析库不支持。",
+                FailureReason.TLS_IMPERSONATION,
+            )
 
-            // 需要登录态的站点（小红书、微博等）常表现为跳转到登录页后报 Unsupported URL
-            "/login" in text || "login" in text || "sign in" in text ||
-                "authentication" in text || "401" in text || "403" in text ->
+            // 需要登录态的站点（小红书、微博等）常表现为跳到登录页后报 Unsupported URL；
+            // 此时报错里一般带登录页 URL，能命中下面的重定向特征。
+            LOGIN_REDIRECT_PATTERN.containsMatchIn(text) -> FriendlyError(
                 "该内容需要登录才能访问（链接被跳转到了登录页）。" +
-                    "可在本页导入浏览器的 cookies.txt 后重试。"
+                    "可点下方「在 App 内登录」自动获取 Cookie，或导入 cookies.txt 后重试。",
+                FailureReason.LOGIN_REQUIRED,
+            )
+
+            // 裸 401/403 一律不判「需要登录」：既可能是反爬/风控，也可能是权限问题。
+            "401" in text || "403" in text -> FriendlyError(
+                "站点返回了访问限制（HTTP 401/403）。可能涉及反爬拦截或内容权限，" +
+                    "详细原因见下方「诊断信息」。",
+                FailureReason.UNKNOWN,
+            )
 
             "404" in text || "not found" in text || "unavailable" in text ||
-                "deleted" in text || "suspended" in text ->
-                "帖子不存在、已被删除或不可访问。"
+                "deleted" in text || "suspended" in text -> FriendlyError(
+                "帖子不存在、已被删除或不可访问。",
+                FailureReason.NOT_FOUND,
+            )
 
-            "rate limit" in text || "429" in text || "too many requests" in text ->
-                "请求过于频繁（被限流），请稍后再试。"
+            "rate limit" in text || "429" in text || "too many requests" in text -> FriendlyError(
+                "请求过于频繁（被限流），请稍后再试。",
+                FailureReason.RATE_LIMIT,
+            )
 
-            "unsupported url" in text ->
-                "该链接不受支持或已失效，请确认链接可直接打开且包含视频。"
+            "unsupported url" in text -> FriendlyError(
+                "该链接不受支持或已失效，请确认链接可直接打开且包含视频。",
+                FailureReason.UNSUPPORTED,
+            )
 
             // ---- 网络层错误：属于"到站点的链路没建立起来"，与链接内容无关 ----
             // Errno 111 = ECONNREFUSED：连接被直接拒绝（代理未启动/端口不对，或链路被阻断）
-            "errno 111" in text || "connection refused" in text ->
-                "连接被拒绝，无法到达该站点。若下载 X 等站点，请确认代理已开启；" +
-                    "若代理不是全局模式，请在上方「网络代理」里填写代理地址。"
+            "errno 111" in text || "connection refused" in text -> FriendlyError(
+                "连接被拒绝，无法到达该站点。请检查网络，或在系统层使用 VPN 全局模式后重试。",
+                FailureReason.NETWORK,
+            )
 
             // TLS 握手中途被断开：链路被干扰或代理不稳定
             "unexpected_eof" in text || "sslerror" in text || "[ssl" in text ||
-                "ssl: " in text || "certificate verify failed" in text ->
+                "ssl: " in text || "certificate verify failed" in text -> FriendlyError(
                 "网络连接被异常中断（TLS 握手失败）。常见原因是网络链路受干扰或代理不稳定，" +
-                    "请确认代理可用后重试。"
+                    "请确认代理可用后重试。",
+                FailureReason.NETWORK,
+            )
 
             // 域名解析失败
             "name or service not known" in text || "nodename nor servname" in text ||
                 "getaddrinfo" in text || "temporary failure in name resolution" in text ->
-                "域名解析失败，请检查网络或代理设置。"
+                FriendlyError(
+                    "域名解析失败，请检查网络或代理设置。",
+                    FailureReason.NETWORK,
+                )
 
             // Errno 104：连接被重置
             "errno 104" in text || "connection reset" in text ||
-                "connection aborted" in text || "remote end closed" in text ->
-                "连接被重置（网络链路中断），请确认代理可用后重试。"
+                "connection aborted" in text || "remote end closed" in text -> FriendlyError(
+                "连接被重置（网络链路中断），请确认代理可用后重试。",
+                FailureReason.NETWORK,
+            )
 
             "unable to download webpage" in text || "timed out" in text ||
-                "connection" in text || "network" in text ->
-                "网络异常，请检查网络后重试。"
+                "connection" in text || "network" in text -> FriendlyError(
+                "网络异常，请检查网络后重试。",
+                FailureReason.NETWORK,
+            )
 
-            "unable to extract" in text || "unable to complete" in text ->
-                "解析失败，站点结构可能已变化（yt-dlp 需随库版本更新）。"
+            "unable to extract" in text || "unable to complete" in text -> FriendlyError(
+                "解析失败，站点结构可能已变化（yt-dlp 需随库版本更新）。",
+                FailureReason.UNKNOWN,
+            )
 
             // 兜底：不外泄可能含超长 URL 的原始文本，完整内容仅留在诊断信息里
-            else -> "下载失败（yt-dlp 退出码 $exitCode）。详细原因见下方「诊断信息」。"
+            else -> FriendlyError(
+                "下载失败（yt-dlp 退出码 $exitCode）。详细原因见下方「诊断信息」。",
+                FailureReason.UNKNOWN,
+            )
         }
     }
 
@@ -327,6 +400,20 @@ class YtDlpDownloader(private val context: Context) {
     companion object {
         const val OUT_DIR_NAME = "ytdlp-downloads"
 
+        /** 主格式：单一最佳（X 通常为单一 mp4），不依赖外部 ffmpeg 做音视频合并 */
+        private const val DEFAULT_FORMAT = "b"
+
+        /**
+         * 降级格式：yt-dlp 默认写法「最佳视频流 + 最佳音频流 / 单一最佳」，
+         * 允许 DASH 分离流。内嵌环境若无 ffmpeg，合并会被跳过，但至少能拿到视频流。
+         */
+        private const val FALLBACK_FORMAT = "bv*+ba/b"
+
+        private val FORMAT_UNAVAILABLE_PATTERN = Regex(
+            "requested format is not available",
+            RegexOption.IGNORE_CASE,
+        )
+
         /** 成品长期目录名（位于外部应用专属目录下，见 [finalDir]） */
         private const val FINAL_DIR_NAME = "downloads"
 
@@ -335,6 +422,17 @@ class YtDlpDownloader(private val context: Context) {
          * `.80s` 在括号外对最终结果截断 80 字符。非法字符由 yt-dlp 自动消毒。
          */
         private const val OUTPUT_TEMPLATE = "%(title,id).80s.%(ext)s"
+
+        /**
+         * 诊断文本里的「登录跳转」特征。只认 URL 路径/明确的认证短语，
+         * 不认裸 "login" / "sign in"：后者会出现在 "Sign in to confirm you're not a bot"
+         * 这类**反爬提示**里，误判会让 YouTube 弹一个毫无意义的登录页。
+         */
+        private val LOGIN_REDIRECT_PATTERN = Regex(
+            "/login|/signin|/sign-in|/passport|/auth/|account/login|login\\?|" +
+                "authentication required|401 unauthorized",
+            RegexOption.IGNORE_CASE,
+        )
 
         /** 链路类瞬态错误（与 friendlyMessage 的网络层分组一致）：自动重试只针对这一组 */
         private val TRANSIENT_NETWORK_PATTERN = Regex(

@@ -3,7 +3,7 @@
 个人使用的 Android 原生工具箱：**下载 X 视频 → 截取片段 → 转 GIF → 压缩 GIF**，全部在手机本地完成，不依赖自建服务器。
 
 - **技术栈**：Kotlin + Jetpack Compose + Material 3，Gradle 多模块可扩展结构
-- **当前版本**：0.2.0（媒体处理与下载均已真机验证；图片压缩模块为 0.2.0 新增，已完成真机基础验证，广色域/HEIC/超大图待验证）
+- **当前版本**：0.3.0（新增应用内登录自动获取 Cookie、下载/工具页 UI 重构与全新应用图标；图片压缩模块为 0.2.0 新增，广色域/HEIC/超大图待验证）
 
 ---
 
@@ -11,7 +11,8 @@
 
 | 功能 | 状态 | 说明 |
 |---|---|---|
-| **视频下载（多站点）** | ✅ 真机可用 | 基于 yt-dlp：**X（Twitter）、Facebook 已实测可用**；小红书公开笔记可下、需登录的笔记需导入 Cookie；YouTube 返回 403（库限制，见下）；支持粘贴分享文本自动提取链接；下载完可一键送去转 GIF |
+| **视频下载（多站点）** | ✅ 真机可用 | 基于 yt-dlp：**X（Twitter）、Facebook 已实测可用**；小红书公开笔记可下、需登录的笔记可在 App 内登录或导入 Cookie；YouTube 返回 403（库限制，见下）；支持粘贴分享文本自动提取链接；下载完可一键送去转 GIF |
+| **应用内登录获取 Cookie** | ✅ 已实现（待真机验证） | 下载提示需要登录时，一键打开 WebView 登录页，登录后自动把 Cookie 按站点保存并重试；无需电脑导出 cookies.txt |
 | **视频转 GIF** | ✅ 真机可用 | 本地视频导入（SAF）、Media3 预览、片段选择、参数可调（fps/宽度/颜色数/抖动） |
 | **GIF 压缩** | ✅ 已实现 | 输入已有 GIF + 目标大小，按「减色 → 降帧率 → 降分辨率」级联压缩，每轮校验真实字节数 |
 | **视频压缩** | ✅ 已实现 | 目标大小 + 可选倍速；码率 → 分辨率 → 帧率级联，硬编 h264_mediacodec 失败自动回落 mpeg4 |
@@ -67,12 +68,35 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
      输入框会自动去掉链接以外的文字（含中文推广语与句末标点）；
 3. 下载完成后可「保存到本地」或直接「去转 GIF」。
 
-**需要登录的内容（可选配置）**：小红书、微博等站点对部分内容要求登录态，否则链接会跳转到登录页导致失败。
-此时可在页面「登录 Cookie」区导入浏览器导出的 `cookies.txt`（Netscape 格式）：
+> **界面分三层**：首屏常驻「链接输入 + 唯一主按钮 + 进度/结果/错误」，
+> 操作与反馈不再分开；「Cookie 与登录」「通知与存储」「诊断与日志」默认折叠，点标题展开，
+> 收起时只显示一行摘要。主按钮会随状态在「开始下载 / 继续下载 / 重试下载」之间切换。
 
-- 电脑浏览器安装扩展（如 **Get cookies.txt LOCALLY**）→ 登录目标站点 → 导出 cookies.txt；
-- 把文件传到手机（可用 `adb push` 到 `/sdcard/Download/`）→ 在 App 内点「导入 cookies.txt」选择它；
-- Cookie 仅保存在应用私有目录，不写入日志、不外传；换设备或登录态过期后需重新导出。
+**需要登录的内容（可选配置）**：小红书、微博等站点对部分内容要求登录态，否则链接会跳转到登录页导致失败。
+有两种方式，推荐第一种（**不需要电脑**）：
+
+1. **应用内登录**：下载失败时，主任务卡里的错误下方会直接出现「在 App 内登录并获取 Cookie」；
+   也可展开「Cookie 与登录」预先登录。App 打开一个 WebView，正常登录目标站点
+   （验证码 / 短信验证由本人完成），点底部的「完成并导入 Cookie」后自动把登录 Cookie 转成
+   Netscape 格式、按站点存入应用私有目录。回到下载页即显示已导入，点主按钮「重试下载」即可。
+2. **导入 cookies.txt**：电脑浏览器安装扩展（如 **Get cookies.txt LOCALLY**）→ 登录目标站点 →
+   导出 cookies.txt → 传到手机（可用 `adb push` 到 `/sdcard/Download/`）→
+   在 App 内点「导入 cookies.txt」选择它。
+
+> 两种方式写入的是同一份 `filesDir/cookies/<注册域>.txt`，下载时按链接自动匹配，
+> 只把同站点的 Cookie 交给 yt-dlp。短链（`xhslink.cn` 等）会先归一化到真实站点再存。
+>
+> 登录页走 Android 系统网络栈；如需代理请在系统层使用 VPN 全局模式
+> （App 内已移除单独的网络代理设置）。仅支持白名单内站点；
+> YouTube 的 403 属 TLS 指纹 / JS 挑战，登录也解不了，因此不会弹出登录入口。
+>
+> 小红书、抖音、Instagram 等在**移动端 UA** 下只推「下载 App」、不提供 WAP 登录页，而站点按
+> HTTP 请求头的 UA 分流。因此登录页按站点请求**桌面版页面**（改 WebView 的 UA + 开宽视口），
+> 只作用于 WebView，**不改变 yt-dlp 下载端的 UA**；这是为了拿到平台本来提供的 PC 页面，
+> 验证码 / 短信仍由本人完成。Chrome 版本取自系统 WebView，无需手工维护；个别站点若 PC 版
+> 反而不好用，可在 `LoginSites.Site.desktopMode` 里单独关闭。
+
+Cookie 仅保存在应用私有目录，不写入日志、不外传；换设备或登录态过期后需重新登录 / 导出。
 
 **站点支持情况（真机实测）**：
 
@@ -80,7 +104,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 |---|---|
 | X（Twitter） | ✅ 可用 |
 | Facebook（公开视频） | ✅ 可用 |
-| 小红书（分享短链） | ⚠️ 公开笔记可用；需登录的笔记需导入 Cookie（否则跳转登录页失败） |
+| 小红书（分享短链） | ⚠️ 公开笔记可用；需登录的笔记需应用内登录或导入 Cookie（否则跳转登录页失败） |
+| B 站 | ⚠️ 解析正常；默认返回 DASH 分离流，`-f b`(单一最佳) 会报「Requested format is not available」。现已改为格式失败自动降级到 yt-dlp 默认组合（真机待复验） |
+| 抖音 | ⚠️ 应用内登录与 Cookie 导出成功，但播放地址需 `a_bogus`/`X-Bogus` 签名与 TLS 指纹，免费版解析库大概率拿不到（见已知限制 8） |
 | YouTube | ❌ 返回 403（反爬指纹 或 签名挑战需 JS 运行时，均属 yt-dlp-android 免费版能力之外） |
 | TikTok / Instagram | ⚠️ 未验证；官方说明这类站点需 Pro 版（curl-cffi）才较可靠 |
 
@@ -147,8 +173,11 @@ app/src/main/java/com/jhh/myapptools/
 │   └── GifInspector.kt          # GIF 结构解析（帧数/尺寸/循环校验）
 ├── download/
 │   ├── XMediaResolver.kt        # 解析器接口（PRD 5.3 抽象，实现待补）
-│   ├── YtDlpDownloader.kt       # 下载实现（yt-dlp）
-│   └── DownloadEvent.kt
+│   ├── YtDlpDownloader.kt       # 下载实现（yt-dlp）+ 结构化失败原因分类
+│   ├── DownloadEvent.kt         # 事件模型 + FailureReason
+│   ├── CookieStore.kt           # Netscape cookies.txt 按平台存取（原子写入）
+│   ├── LoginSites.kt            # 应用内登录站点白名单
+│   └── WebViewCookieExporter.kt # CookieManager → Netscape 7 列
 ├── media/VideoMetadata.kt       # 视频元信息读取
 ├── video/VideoCompressor.kt     # 视频压缩（码率 → 分辨率 → 帧率级联）
 ├── image/                       # 图片压缩（纯原生 Bitmap，不依赖 ffmpeg）
@@ -157,6 +186,7 @@ app/src/main/java/com/jhh/myapptools/
 │   ├── ImageFormat.kt           # 输出格式与平台编码能力（WebP 无损仅 API 30+）
 │   └── ImageToolPrefs.kt        # 压缩参数记忆
 └── ui/                          # 各功能页面 + 预览组件 + SAF 工具
+    └── LoginCookieActivity.kt    # 独立 WebView 登录页：登录后自动导出 Cookie
 ```
 
 ---
@@ -183,7 +213,23 @@ app/src/main/java/com/jhh/myapptools/
 4. **无视频帖会报错**：如链接指向的帖子只有图片/文字，或视频位于被引用的帖子中，会提示"该帖子中没有找到视频"；
 5. **YouTube 不可用（403）**：yt-dlp 对 YouTube 的反爬拦截需要 TLS 指纹伪装或 JS 运行时（解签名挑战），
    两者在 yt-dlp-android 免费版 + Android 内嵌 Python 环境下都不具备；
-6. `minSdk 24`：Android 7.0 以下与纯 32 位设备不支持。
+6. `minSdk 24`：Android 7.0 以下与纯 32 位设备不支持；
+7. **应用内登录不保证下载一定成功**：`CookieManager.getCookie()` 只返回 `name=value`，
+   domain / path / expires 等属性需按父域补齐（近似值）；WebView（Chrome UA / Chromium TLS）
+   与 yt-dlp（Python requests）指纹不同，部分站点还绑定设备签名，仅复制 Cookie 可能仍被拒绝。
+   按站点请求 PC 版页面虽能绕开「移动端只推下载 App」，
+   但 `navigator.platform` / 触屏 / WebGL 等仍是移动设备信号，个别站点可能因此触发更严验证，
+   且桌面 UA **不改变 yt-dlp 下载端的 UA**。验证码 / 风控需本人完成，App 不做任何绕过尝试。
+8. **B 站等 DASH 站点需格式降级**：B 站默认返回音视频分离流，`-f b`(best) 只挑单一格式，
+   会报 `Requested format is not available`；日志里的「1080P 高码率 are missing」只是可忽略的
+   大会员画质提示，不是失败原因。现在检测到该报错会自动改用 `bv*+ba/b`（yt-dlp 默认组合）重试一次。
+   内嵌环境无 ffmpeg 时合并会被跳过，产物可能是**不含声音的视频流**；
+   `--list-formats` 不在库的参数白名单内，无法先列出格式再精确挑。
+9. **抖音大概率下不了**：应用内登录、Cookie 导出均已验证成功，但播放地址接口需要
+   `a_bogus`/`X-Bogus` 签名（前端 JS 生成、绑定 `ttwid`/`verifyFp` 等设备指纹），
+   yt-dlp-android 免费版无 JS 运行时、无 TLS 指纹伪装。Cookie 只回答「我是谁」，
+   生成不了签名；这与小红书「导入 Cookie 即可下载」不是同一类问题。
+   另「清除文件」只删 `cookies/<注册域>.txt`，WebView 的 `CookieManager` 登录态需在登录页单独清除。
 
 > 1、2 两条可通过实现自研 X 解析器（直接解析公开帖子取 media URL）+ OkHttp 下载来消除，
 > 代价是需随 X 改版维护；`XMediaResolver` 接口即为该实现预留的替换点。
@@ -203,4 +249,5 @@ app/src/main/java/com/jhh/myapptools/
 
 - 媒体处理全部在设备本地完成，不上传视频/GIF 到自建服务器；
 - 仅申请必要权限（`INTERNET` 等），文件读写全程使用系统文件选择器（SAF）；
-- 不处理需要登录或付费才能访问的内容，不绕过任何访问控制。
+- 应用内登录只用于用户本人账号访问本人有权访问的内容；登录 Cookie 仅存应用私有目录
+  （`allowBackup=false`），不写日志、不外传；不绕过验证码与任何访问控制。

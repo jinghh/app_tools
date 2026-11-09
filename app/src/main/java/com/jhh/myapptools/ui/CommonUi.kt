@@ -1,21 +1,40 @@
 package com.jhh.myapptools.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.jhh.myapptools.R
 import java.util.Locale
 
 /**
@@ -98,13 +117,168 @@ internal fun ParamSlider(
     }
 }
 
-/**
- * MB 值展示：≥10MB 取整，否则保留一位小数。
- * 滑块是连续值，读数跟着拖动实时变化，位数太多会一直抖动。
- */
+/** MB 值展示：≥10MB 取整，否则保留一位小数。 */
 internal fun formatMb(mb: Float): String =
     if (mb >= 10f) {
         String.format(Locale.US, "%.0f MB", mb)
     } else {
         String.format(Locale.US, "%.1f MB", mb)
     }
+
+// ---------- 5 个工具页共用的分区 / 帮助 / 诊断组件 ----------
+
+/**
+ * 可折叠区块：低频内容默认收起，只显示一行摘要；折叠状态跨配置变更保留。
+ * 从 DownloadScreen 提升为 internal，供 5 个页共用。
+ */
+@Composable
+internal fun CollapsibleSection(
+    title: String,
+    summary: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    if (!expanded) {
+                        Text(
+                            summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = if (expanded) {
+                        Icons.Filled.KeyboardArrowUp
+                    } else {
+                        Icons.Filled.KeyboardArrowDown
+                    },
+                    contentDescription = if (expanded) "收起" else "展开",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    content()
+                }
+            }
+        }
+    }
+}
+
+/** 「?」帮助图标：点击弹出说明弹窗，长说明不占版面 */
+@Composable
+internal fun HelpIcon(title: String, text: String) {
+    var show by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = { show = true },
+        modifier = Modifier.size(32.dp),
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_help),
+            contentDescription = title,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+    if (show) {
+        AlertDialog(
+            onDismissRequest = { show = false },
+            confirmButton = {
+                TextButton(onClick = { show = false }) { Text("知道了") }
+            },
+            title = { Text(title) },
+            text = { Text(text, style = MaterialTheme.typography.bodyMedium) },
+        )
+    }
+}
+
+/** 卡片标题 + 「?」帮助入口 */
+@Composable
+internal fun TitleWithHelp(title: String, helpTitle: String, helpText: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        HelpIcon(title = helpTitle, text = helpText)
+    }
+}
+
+/** 卡片标题 + 「复制」按钮（日志/诊断信息用） */
+@Composable
+internal fun SectionHeaderWithCopy(
+    title: String,
+    textToCopy: String,
+    onCopy: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = onCopy, enabled = textToCopy.isNotBlank()) {
+            Text("复制")
+        }
+    }
+}
+
+/** 等宽文本块：限高 200dp 内部滚动，避免长日志把整页撑到无限长 */
+@Composable
+internal fun MonoTextBlock(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 200.dp)
+            .verticalScroll(rememberScrollState()),
+    )
+}
+
+internal data class DiagnosticsBlock(val title: String, val text: String)
+
+/**
+ * 诊断 / 命令 / 日志的统一折叠区：默认收起，展开后每个文本块限高。
+ * [blocks] 为空时不渲染任何东西，避免各页多一张空卡。
+ */
+@Composable
+internal fun DiagnosticsSection(
+    blocks: List<DiagnosticsBlock>,
+    summary: String,
+    title: String = "诊断与日志",
+    onCopy: ((label: String, text: String) -> Unit)? = null,
+) {
+    if (blocks.isEmpty()) return
+    val copy = onCopy
+    CollapsibleSection(title = title, summary = summary) {
+        blocks.forEach { block ->
+            if (copy != null) {
+                SectionHeaderWithCopy(
+                    title = block.title,
+                    textToCopy = block.text,
+                    onCopy = { copy(block.title, block.text) },
+                )
+            } else {
+                Text(block.title, style = MaterialTheme.typography.titleSmall)
+            }
+            MonoTextBlock(block.text)
+        }
+    }
+}

@@ -1,5 +1,6 @@
 package com.jhh.myapptools.ui
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -13,16 +14,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
@@ -46,16 +41,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import com.jhh.myapptools.R
 import com.jhh.myapptools.download.CookieStore
 import com.jhh.myapptools.download.DownloadCenter
-import com.jhh.myapptools.download.NetworkPrefs
+import com.jhh.myapptools.download.FailureReason
+import com.jhh.myapptools.download.LoginSites
 import com.jhh.myapptools.download.NotificationPrefs
 import com.jhh.myapptools.download.UrlExtractor
 import com.jhh.myapptools.download.YtDlpDownloader
@@ -68,19 +61,12 @@ import java.io.File
 /**
  * 视频下载页（基于 yt-dlp，支持多站点）。
  *
- * 实测支持情况：
- * - ✅ X（Twitter）、✅ Facebook（公开视频）已真机验证；
- * - ✅ 小红书：公开笔记可直接下载；需登录的笔记导入浏览器 Cookie 后可下载（已端到端验证通过）；
- * - ❌ YouTube 返回 403（反爬指纹或签名挑战需 JS 运行时，属库的免费版/Android 限制）。
+ * 布局分三层，避免「十来张等权卡片平铺」导致主任务被淹没：
+ * 1. 主任务区（常驻）：链接输入 + 唯一主按钮 + 进度/结果/错误反馈，操作与结果零距离；
+ * 2. 设置区（默认折叠）：Cookie 与登录、通知与存储，收起时只显示一行摘要；
+ * 3. 诊断区（默认折叠）：诊断信息与 yt-dlp 日志，展开后限高、内部滚动。
  *
- * 能力边界（已核实，见 [com.jhh.myapptools.download.XMediaResolver] 注释）：
- * yt-dlp-android 库不支持下载前获取元信息与直链，故：
- * - 下载由 yt-dlp 自身完成（有进度，但**无法取消**）；
- * - 时长/分辨率在下载完成后由本地 VideoMetadata 读取；
- * - 下载完成后可「去转 GIF」把文件直接交给转换模块。
- *
- * 后台下载：下载不跑在本界面的协程里，而是交给 [DownloadCenter] + 前台服务，
- * 因此切到后台不会被系统冻结/回收，界面重建后也能看到进度与结果。
+ * 状态仍全部来自进程级 [DownloadCenter]，界面只观察；切后台、界面重建都不丢。
  */
 @Composable
 fun DownloadScreen(
@@ -104,19 +90,68 @@ fun DownloadScreen(
     val state by DownloadCenter.state.collectAsState()
     val running = state.running
 
-    // 按平台保存的 Cookie 列表（导入/清除后刷新）
     var cookieEntries by remember { mutableStateOf(cookieStore.list()) }
-    // 开关持久化（P2-11）：与代理/通知开关一致，下次进来恢复上次选择
     var useCookie by remember { mutableStateOf(cookieStore.isUseCookieEnabled()) }
     var url by remember { mutableStateOf("") }
 
-    // 当前链接自动匹配到的平台 Cookie（随输入/列表变化重算，避免每帧做文件 IO）
+    // 随输入/列表变化重算，避免每帧做文件 IO
     val matchedCookie = remember(url, cookieEntries) { cookieStore.matchForUrl(url) }
 
-    val networkPrefs = remember { NetworkPrefs(context) }
-    var proxyText by remember { mutableStateOf(networkPrefs.proxy()) }
+    // ---------- 应用内登录 ----------
 
-    /** 复制文本到剪贴板（Android 13+ 系统会额外提示"已复制"） */
+    val loginLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val entries = cookieStore.list()
+        cookieEntries = entries
+        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val data = result.data ?: return@rememberLauncherForActivityResult
+        val platform = data.getStringExtra(LoginCookieActivity.EXTRA_PLATFORM)
+            ?: return@rememberLauncherForActivityResult
+        val count = data.getIntExtra(LoginCookieActivity.EXTRA_COOKIE_COUNT, 0)
+        val name = entries.firstOrNull { it.platform == platform }?.displayName ?: platform
+        val msg = "已从应用内登录导入 $name Cookie（$count 条）"
+        Toast.makeText(context, "$msg，请点「重试下载」", Toast.LENGTH_LONG).show()
+        DownloadCenter.appendLog(msg)
+    }
+
+    fun targetFor(rawUrl: String): LoginTarget? {
+        val candidate = UrlExtractor.extract(rawUrl) ?: rawUrl.trim()
+        if (!candidate.startsWith("http", ignoreCase = true)) return null
+        val platform = cookieStore.platformOfUrl(candidate) ?: return null
+        val site = LoginSites.find(platform) ?: return null
+        return LoginTarget(candidate, platform, site.fallbackLoginUrl)
+    }
+
+    // 失败时优先用「本次下载实际使用的链接」：输入框是 remember，
+    // Activity 在 WebView 期间被回收会丢，而 DownloadUiState.url 是进程级状态。
+    val failedLoginTarget = remember(state.url, state.failureReason, url) {
+        val maybeLogin = state.failureReason in setOf(
+            FailureReason.LOGIN_REQUIRED,
+            FailureReason.UNSUPPORTED,
+            FailureReason.UNKNOWN,
+        )
+        if (maybeLogin) targetFor(state.url?.takeUnless { it.isBlank() } ?: url) else null
+    }
+
+    val proactiveLoginTarget = remember(url) { targetFor(url) }
+
+    val unsupportedNote = remember(url) {
+        val candidate = UrlExtractor.extract(url) ?: url.trim()
+        cookieStore.platformOfUrl(candidate)?.let { LoginSites.unsupportedNote(it) }
+    }
+
+    fun openLogin(target: LoginTarget) {
+        loginLauncher.launch(
+            LoginCookieActivity.intent(
+                context,
+                target.entryUrl,
+                target.platform,
+                target.fallbackUrl,
+            )
+        )
+    }
+
     fun copyToClipboard(label: String, text: String) {
         if (text.isBlank()) return
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -124,12 +159,7 @@ fun DownloadScreen(
         Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
     }
 
-    // ---------- 通知提醒设置 ----------
-    //
-    // 技术约束：App **无法**自行授予或撤销通知权限，只能引导用户在系统弹窗或系统设置里操作。
-    // 因此提供两个独立入口，且两者都不影响下载：
-    // 1) 开关：控制"下载完成后是否提醒我"（App 内偏好，持久化）；
-    // 2) 系统设置入口：控制系统层面的通知权限（可开启，也可完全关闭）。
+    // ---------- 通知提醒 ----------
 
     val notifyPrefs = remember { NotificationPrefs(context) }
     var resultNotify by remember { mutableStateOf(notifyPrefs.isResultNotifyEnabled()) }
@@ -140,23 +170,20 @@ fun DownloadScreen(
     ) { granted ->
         permissionGranted = granted
         if (!granted) {
-            // 系统已不再弹窗（被"不再询问"）时，下面的系统设置入口是唯一开启途径，故明确指引
             Toast.makeText(
                 context,
-                "未授予通知权限：下载不受影响。可随时用下方「打开系统通知设置」开启",
+                "未授予通知权限：下载不受影响。可在「通知与存储」里打开系统设置",
                 Toast.LENGTH_LONG,
             ).show()
         }
     }
 
-    // 从系统设置返回时同步真实权限状态（用户可能刚在设置里改过）；
-    // 顺带刷新断点残留大小（覆盖"进程被杀后重启"也能看到可续传内容的情况）
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         permissionGranted = notifyPrefs.isSystemPermissionGranted()
         DownloadCenter.refreshResumable(context)
+        cookieEntries = cookieStore.list()
     }
 
-    // 分享直达（P2-5）：从外部分享进入时自动填入提取出的链接
     LaunchedEffect(prefilledUrl) {
         val link = prefilledUrl ?: return@LaunchedEffect
         url = link
@@ -164,7 +191,6 @@ fun DownloadScreen(
         Toast.makeText(context, "已自动填入分享的链接", Toast.LENGTH_SHORT).show()
     }
 
-    /** 请求系统通知权限；系统已不再弹窗时（被永久拒绝）需到系统设置里手动开启 */
     fun requestNotificationPermission() {
         if (!permissionGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissionLauncher.launch(NotificationPrefs.PERMISSION)
@@ -187,11 +213,10 @@ fun DownloadScreen(
     fun onToggleResultNotify(enabled: Boolean) {
         resultNotify = enabled
         notifyPrefs.setResultNotifyEnabled(enabled)
-        // 打开时顺带引导系统权限，否则开关显示为"开"但通知实际发不出来
         if (enabled) requestNotificationPermission()
     }
 
-    // ---------- 登录 Cookie 导入 ----------
+    // ---------- Cookie 导入 ----------
 
     val pickCookieLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -221,41 +246,18 @@ fun DownloadScreen(
         }
     }
 
-    /** 下载的实际入口：resume=false 先清掉上次的半成品；resume=true 保留 .part 接着下 */
     fun launchDownload(resume: Boolean, fixedUrl: String? = null) {
         if (running) return
-        // 兜底再抽取一次：确保即使输入框残留多余文字也能正确下载
         val target = fixedUrl ?: (UrlExtractor.extract(url) ?: url.trim())
         if (target.isBlank()) return
-
-        // 代理填了但格式不对：直接拦下，避免"静默降级为不用代理"再报一个难懂的网络错误
-        if (!NetworkPrefs.isValid(proxyText)) {
-            Toast.makeText(context, "代理地址格式无效，请检查后再下载", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        // 仅在用户没关掉提醒时请求权限（关掉后不再打扰）；授权是异步的，不阻塞下载
         if (resultNotify) requestNotificationPermission()
-
-        // 只把**匹配当前站点**的那份 Cookie 交出去；未匹配或开关关闭则不带
         val cookiePath =
             if (useCookie) cookieStore.matchForUrl(target)?.file?.absolutePath else null
-        DownloadCenter.start(
-            context,
-            target,
-            cookiePath,
-            networkPrefs.normalizedProxyOrNull(),
-            resume,
-        )
+        DownloadCenter.start(context, target, cookiePath, resume)
     }
 
-    /** 重新填写链接后点下载：清掉上次的半成品，从头下 */
     fun startDownload() = launchDownload(resume = false)
 
-    /**
-     * 续传：用**上次尝试的那个 URL**（而不是输入框当前内容）继续下载，
-     * 避免用户中途改过链接、拿旧 .part 去续新视频。
-     */
     fun resumeDownload() {
         if (running) return
         val target = YtDlpDownloader.resumeUrl(context)
@@ -266,24 +268,29 @@ fun DownloadScreen(
         launchDownload(resume = true, fixedUrl = target)
     }
 
-    // 剪贴板确认后：填入输入框并立即开始下载（检测本身在 MainActivity 全局完成）
+    fun retryAfterLogin() {
+        if (running) return
+        val target = state.url?.takeUnless { it.isBlank() }
+            ?: YtDlpDownloader.resumeUrl(context)
+            ?: url.trim()
+        if (target.isBlank()) {
+            Toast.makeText(context, "没有可重试的链接", Toast.LENGTH_SHORT).show()
+            return
+        }
+        launchDownload(resume = false, fixedUrl = target)
+    }
+
     LaunchedEffect(autoDownloadUrl) {
         val link = autoDownloadUrl ?: return@LaunchedEffect
         url = link
         if (running) {
-            // 已有任务在跑时不抢跑，只把链接填好，等这次结束用户可再点「开始下载」
             Toast.makeText(context, "已有下载任务进行中，链接已填入", Toast.LENGTH_LONG).show()
         } else {
             launchDownload(resume = false, fixedUrl = link)
         }
-        // 先启动再消费：消费会触发重组并取消本 LaunchedEffect，放在最后更稳妥
         onAutoDownloadConsumed()
     }
 
-    /**
-     * 一键保存到系统「下载」目录（MediaStore，API 29+ 免权限）；
-     * SAF 保留为「另存为」入口（P2-6）。
-     */
     fun quickSaveToDownloads(file: File) {
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
@@ -293,7 +300,7 @@ fun DownloadScreen(
                 Toast.makeText(context, "已保存到系统下载目录", Toast.LENGTH_SHORT).show()
                 DownloadCenter.appendLog("已保存到系统下载目录：${file.name}")
             } else {
-                Toast.makeText(context, "保存失败，可改用「另存为…」选择位置", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "保存失败，可改用「另存为」", Toast.LENGTH_LONG).show()
                 DownloadCenter.appendLog("保存到下载目录失败：${file.name}")
             }
         }
@@ -323,22 +330,41 @@ fun DownloadScreen(
         }
     }
 
+    // 三个旧入口（开始/继续/重试）收敛成一个；不用 remember 缓存 onClick，
+    // 避免闭包捕获到旧的 running / url 值。
+    val primary = when {
+        running -> PrimaryAction("下载中…", false) { }
+        state.error != null -> PrimaryAction("重试下载", true) { retryAfterLogin() }
+        state.resumableBytes > 0L -> PrimaryAction(
+            "继续下载（已下 ${formatBytes(state.resumableBytes)}）", true
+        ) { resumeDownload() }
+
+        else -> PrimaryAction("开始下载", url.isNotBlank()) { startDownload() }
+    }
+
+    val cookieSummary = cookieMatchText(
+        useCookie = useCookie,
+        hasUrl = url.isNotBlank(),
+        matched = matchedCookie,
+        entries = cookieEntries,
+    )
+
     ScreenScaffold(
         modifier = modifier,
         title = "视频下载",
         titleExtra = { HelpIcon(title = "视频下载", text = HELP_PAGE) },
     ) {
-        Card {
+        // ========== 1. 主任务区（常驻）==========
+        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 TitleWithHelp("视频链接", "链接与下载说明", HELP_URL)
                 OutlinedTextField(
                     value = url,
                     onValueChange = { raw ->
                         val extracted = UrlExtractor.extract(raw)
-                        // 分享文本（如小红书）夹带中文与推广语时，自动只保留链接
                         if (extracted != null && extracted != raw.trim()) {
                             url = extracted
                             Toast.makeText(context, "已自动提取链接", Toast.LENGTH_SHORT).show()
@@ -349,7 +375,6 @@ fun DownloadScreen(
                     label = { Text("粘贴链接或分享文本（X / Facebook / 小红书等）") },
                     singleLine = true,
                     enabled = !running,
-                    // 有内容时显示清除按钮；下载中隐藏（此时输入框整体为禁用态）
                     trailingIcon = {
                         if (url.isNotEmpty() && !running) {
                             IconButton(onClick = { url = "" }) {
@@ -362,215 +387,21 @@ fun DownloadScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { startDownload() },
-                        enabled = !running && url.isNotBlank(),
-                    ) { Text("开始下载") }
+
+                Button(
+                    onClick = primary.onClick,
+                    enabled = primary.enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(primary.label) }
+
+                if (running) {
                     OutlinedButton(
                         onClick = { DownloadCenter.cancel() },
-                        enabled = running,
-                    ) { Text("取消") }
-                }
-            }
-        }
-
-        // 2. 登录 Cookie：按平台分别保存，下载时自动匹配，可关闭
-        Card {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TitleWithHelp("登录 Cookie（可选）", "登录 Cookie 说明", HELP_COOKIE)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("下载时携带 Cookie", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            text = cookieMatchText(
-                                useCookie = useCookie,
-                                hasUrl = url.isNotBlank(),
-                                matched = matchedCookie,
-                                entries = cookieEntries,
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = useCookie,
-                        onCheckedChange = {
-                            useCookie = it
-                            cookieStore.setUseCookieEnabled(it)
-                        },
-                    )
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("取消（放弃等待）") }
                 }
 
-                // 已导入的平台，可单独清除（导入一次即长期保留）
-                if (cookieEntries.isEmpty()) {
-                    Text("尚未导入", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    cookieEntries.forEach { entry ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                entry.displayName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                formatBytes(entry.sizeBytes),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            TextButton(
-                                onClick = {
-                                    cookieStore.clear(entry.platform)
-                                    cookieEntries = cookieStore.list()
-                                    DownloadCenter.appendLog("已清除 ${entry.displayName} Cookie")
-                                },
-                                enabled = !running,
-                            ) { Text("清除") }
-                        }
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = { pickCookieLauncher.launch(arrayOf("*/*")) },
-                    enabled = !running,
-                ) { Text("导入 cookies.txt（自动识别平台）") }
-            }
-        }
-
-        // 3. 网络代理：内嵌 Python 读不到 Android 系统代理，需要显式指定
-        Card {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TitleWithHelp("网络代理（可选）", "网络代理说明", HELP_PROXY)
-                OutlinedTextField(
-                    value = proxyText,
-                    onValueChange = {
-                        proxyText = it
-                        networkPrefs.setProxy(it)
-                    },
-                    label = { Text("如 http://192.168.1.2:7890") },
-                    singleLine = true,
-                    enabled = !running,
-                    isError = !NetworkPrefs.isValid(proxyText),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    text = when {
-                        proxyText.isBlank() -> "留空：使用系统默认（VPN 全局模式可留空）"
-                        NetworkPrefs.isValid(proxyText) ->
-                            "已启用：${NetworkPrefs.normalize(proxyText)}"
-                        else -> "格式无效，示例：http://192.168.1.2:7890 或 socks5://127.0.0.1:1080"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (NetworkPrefs.isValid(proxyText)) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                )
-            }
-        }
-
-        // 3. 通知提醒：App 内偏好（结果通知）+ 系统权限入口，两者都不影响下载
-        Card {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TitleWithHelp("通知提醒（可选）", "通知提醒说明", HELP_NOTIFY)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("下载完成后提醒我", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            text = notifyStatusText(resultNotify, permissionGranted),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (resultNotify && !permissionGranted) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                    Switch(
-                        checked = resultNotify,
-                        onCheckedChange = { onToggleResultNotify(it) },
-                    )
-                }
-                OutlinedButton(
-                    onClick = { openSystemNotificationSettings() },
-                ) {
-                    Text("打开系统通知设置（可开启或完全关闭）")
-                }
-            }
-        }
-
-        // 5. 存储空间：工具产物占用统计与一键清理（P2-9）
-        Card {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("存储空间", style = MaterialTheme.typography.titleMedium)
-                var storageUsage by remember { mutableStateOf<Long?>(null) }
-                fun refreshUsage() {
-                    scope.launch {
-                        storageUsage = withContext(Dispatchers.IO) { AppStorage.totalBytes(context) }
-                    }
-                }
-                LaunchedEffect(Unit) { refreshUsage() }
-                Text(
-                    text = storageUsage?.let { "缓存与产物共占用 ${formatBytes(it)}" }
-                        ?: "统计中…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            val freed = withContext(Dispatchers.IO) { AppStorage.clean(context) }
-                            // .part 可能被清掉，刷新「继续下载」按钮的可用状态
-                            DownloadCenter.refreshResumable(context)
-                            Toast.makeText(
-                                context,
-                                "已释放 ${formatBytes(freed)}",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                            refreshUsage()
-                        }
-                    },
-                    enabled = !running,
-                ) { Text("清理缓存（保留最近结果）") }
-                Text(
-                    "清理范围：下载残留与成品、转 GIF / 压缩产物、导入的临时副本；" +
-                        "每个目录保留最新的一份。下载进行中不可用。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        if (running || state.stage.isNotEmpty()) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("状态", style = MaterialTheme.typography.titleMedium)
+                if (running || state.stage.isNotEmpty()) {
                     if (running) {
                         LinearProgressIndicator(
                             progress = { state.fraction },
@@ -585,24 +416,40 @@ fun DownloadScreen(
                         },
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    // 中断后续传：失败/取消会保留 .part，点这里接着上次的进度下。
-                    // 若要重下，用上面的「开始下载」——它会先清掉半成品。
-                    if (!running && state.resumableBytes > 0L) {
-                        OutlinedButton(onClick = { resumeDownload() }) {
-                            Text("继续下载（已下载 ${formatBytes(state.resumableBytes)}）")
-                        }
+                }
+
+                state.error?.let { err ->
+                    Text(
+                        "错误",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Text(err, style = MaterialTheme.typography.bodyMedium)
+                    failedLoginTarget?.let { target ->
+                        OutlinedButton(
+                            onClick = { openLogin(target) },
+                            enabled = !running,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("在 App 内登录并获取 Cookie") }
+                    }
+                    unsupportedNote?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    matchedCookie?.let { entry ->
+                        Text(
+                            "已检测到 ${entry.displayName} 的 Cookie，点上方主按钮重试",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 }
-            }
-        }
 
-        state.file?.let { file ->
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("下载结果", style = MaterialTheme.typography.titleMedium)
+                state.file?.let { file ->
+                    Text("下载结果", style = MaterialTheme.typography.titleSmall)
                     val meta = state.meta
                     Text(
                         "文件：${file.name}\n" +
@@ -611,108 +458,206 @@ fun DownloadScreen(
                             "分辨率：${meta?.let { "${it.width}x${it.height}" } ?: "读取中…"}",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    // 三个按钮等分宽度 + 收窄内边距：Button 默认 24dp 横向 padding 会把
-                    // 第三个按钮挤到换行，"另存为…" 会变成竖排三行
-                    val actionPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
                             onClick = { onSendToGif(file) },
-                            contentPadding = actionPadding,
                             modifier = Modifier.weight(1f),
                         ) { Text("去转 GIF", maxLines = 1) }
-
+                        FilledTonalButton(
+                            onClick = { onSendToCompress(file) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("视频压缩", maxLines = 1) }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            Button(
+                            OutlinedButton(
                                 onClick = { quickSaveToDownloads(file) },
-                                contentPadding = actionPadding,
                                 modifier = Modifier.weight(1f),
                             ) { Text("存到下载", maxLines = 1) }
-                            OutlinedButton(
-                                onClick = {
-                                    pendingSave = file
-                                    saveVideoLauncher.launch(file.name)
-                                },
-                                contentPadding = actionPadding,
-                                modifier = Modifier.weight(1f),
-                            ) { Text("另存为", maxLines = 1) }
-                        } else {
-                            OutlinedButton(
-                                onClick = {
-                                    pendingSave = file
-                                    saveVideoLauncher.launch(file.name)
-                                },
-                                contentPadding = actionPadding,
-                                modifier = Modifier.weight(1f),
-                            ) { Text("另存为", maxLines = 1) }
                         }
+                        OutlinedButton(
+                            onClick = {
+                                pendingSave = file
+                                saveVideoLauncher.launch(file.name)
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("另存为", maxLines = 1) }
                     }
-                    // 下载完成后的下一步：直接交给「视频压缩」（微信 25MB 等场景）
-                    FilledTonalButton(
-                        onClick = { onSendToCompress(file) },
-                        contentPadding = actionPadding,
+                }
+
+                Text(
+                    cookieSummary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        // ========== 2. 设置区（默认折叠）==========
+        CollapsibleSection(title = "Cookie 与登录", summary = cookieSummary) {
+            Text("登录 Cookie", style = MaterialTheme.typography.titleSmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("下载时携带 Cookie", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        cookieSummary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = useCookie,
+                    onCheckedChange = {
+                        useCookie = it
+                        cookieStore.setUseCookieEnabled(it)
+                    },
+                )
+            }
+
+            if (cookieEntries.isEmpty()) {
+                Text("尚未导入", style = MaterialTheme.typography.bodySmall)
+            } else {
+                cookieEntries.forEach { entry ->
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("视频压缩") }
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            entry.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            formatBytes(entry.sizeBytes),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(
+                            onClick = {
+                                cookieStore.clear(entry.platform)
+                                cookieEntries = cookieStore.list()
+                                val msg = "已清除 ${entry.displayName} Cookie 文件" +
+                                    "（网页登录态需在登录页单独清除）"
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                DownloadCenter.appendLog(msg)
+                            },
+                            enabled = !running,
+                        ) { Text("清除文件") }
+                    }
                 }
             }
-        }
 
-        state.error?.let { err ->
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("错误", style = MaterialTheme.typography.titleMedium)
-                    Text(err, style = MaterialTheme.typography.bodyMedium)
-                }
+            OutlinedButton(
+                onClick = { proactiveLoginTarget?.let { openLogin(it) } },
+                enabled = !running && proactiveLoginTarget != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("在 App 内登录（自动获取 Cookie）") }
+
+            if (url.isNotBlank() && proactiveLoginTarget == null) {
+                Text(
+                    unsupportedNote
+                        ?: "当前链接所在站点暂不支持应用内登录，可用下方的文件导入",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+
+            OutlinedButton(
+                onClick = { pickCookieLauncher.launch(arrayOf("*/*")) },
+                enabled = !running,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("导入 cookies.txt（自动识别平台）") }
         }
 
-        state.diagnostics?.let { diag ->
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    SectionHeaderWithCopy(
-                        title = "诊断信息（开发用）",
-                        textToCopy = diag,
-                        onCopy = { copyToClipboard("诊断信息", diag) },
-                    )
+        CollapsibleSection(
+            title = "通知与存储",
+            summary = "通知：${if (resultNotify) "开" else "关"}",
+        ) {
+            Text("通知提醒", style = MaterialTheme.typography.titleSmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("下载完成后提醒我", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        diag.takeLast(4000),
+                        notifyStatusText(resultNotify, permissionGranted),
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
+                        color = if (resultNotify && !permissionGranted) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                 }
+                Switch(
+                    checked = resultNotify,
+                    onCheckedChange = { onToggleResultNotify(it) },
+                )
             }
-        }
+            OutlinedButton(onClick = { openSystemNotificationSettings() }) {
+                Text("打开系统通知设置")
+            }
 
-        if (state.logs.isNotEmpty()) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    val logText = state.logs.joinToString("\n")
-                    SectionHeaderWithCopy(
-                        title = "yt-dlp 日志",
-                        textToCopy = logText,
-                        onCopy = { copyToClipboard("yt-dlp 日志", logText) },
-                    )
-                    Text(
-                        logText,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
+            Text("存储空间", style = MaterialTheme.typography.titleSmall)
+            var storageUsage by remember { mutableStateOf<Long?>(null) }
+            fun refreshUsage() {
+                scope.launch {
+                    storageUsage = withContext(Dispatchers.IO) { AppStorage.totalBytes(context) }
                 }
             }
+            LaunchedEffect(Unit) { refreshUsage() }
+            Text(
+                text = storageUsage?.let { "缓存与产物共占用 ${formatBytes(it)}" } ?: "统计中…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val freed = withContext(Dispatchers.IO) { AppStorage.clean(context) }
+                        DownloadCenter.refreshResumable(context)
+                        Toast.makeText(
+                            context,
+                            "已释放 ${formatBytes(freed)}",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        refreshUsage()
+                    }
+                },
+                enabled = !running,
+            ) { Text("清理缓存（保留最近结果）") }
+            Text(
+                "清理范围：下载残留与成品、转 GIF / 压缩产物、导入的临时副本；" +
+                    "每个目录保留最新的一份。下载进行中不可用。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
-        // 底部版本号，便于反馈问题时确认版本
+        // ========== 3. 诊断区（默认折叠，展开后限高）==========
+        val diagnostics = state.diagnostics
+        // 日志最多 60 条，但每次重组都拼接没必要；按 logs 缓存
+        val logText = remember(state.logs) { state.logs.joinToString("\n") }
+        val diagBlocks = buildList {
+            diagnostics?.let { add(DiagnosticsBlock("诊断信息", it.takeLast(4000))) }
+            if (logText.isNotEmpty()) add(DiagnosticsBlock("yt-dlp 日志", logText))
+        }
+        DiagnosticsSection(
+            blocks = diagBlocks,
+            summary = "诊断：${if (diagnostics == null) "无" else "有内容"} · 日志 ${state.logs.size} 条",
+            onCopy = { label, text -> copyToClipboard(label, text) },
+        )
+
         Text(
             text = "本地工具箱 v$versionName",
             style = MaterialTheme.typography.bodySmall,
@@ -725,92 +670,55 @@ fun DownloadScreen(
     }
 }
 
-/**
- * 「?」帮助图标：点击弹出说明弹窗。
- *
- * 说明文案默认**不占版面**（原来 5 段长说明直接铺在页面上，把内容挤得很散），
- * 需要时点一下图标即可查看全文。
- */
-@Composable
-private fun HelpIcon(title: String, text: String) {
-    var show by remember { mutableStateOf(false) }
-    IconButton(
-        onClick = { show = true },
-        modifier = Modifier.size(32.dp),
-    ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_help),
-            contentDescription = title,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-    }
-    if (show) {
-        AlertDialog(
-            onDismissRequest = { show = false },
-            confirmButton = {
-                TextButton(onClick = { show = false }) { Text("知道了") }
-            },
-            title = { Text(title) },
-            text = { Text(text, style = MaterialTheme.typography.bodyMedium) },
-        )
-    }
-}
+/** 唯一主按钮的状态：把「开始 / 继续 / 重试」三个入口收敛成一个 */
+private data class PrimaryAction(
+    val label: String,
+    val enabled: Boolean,
+    val onClick: () -> Unit,
+)
 
-/** 卡片标题 + 「?」帮助入口（标题行高度几乎不变，说明收进弹窗） */
-@Composable
-private fun TitleWithHelp(title: String, helpTitle: String, helpText: String) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        HelpIcon(title = helpTitle, text = helpText)
-    }
-}
-
-// ---------- 说明文案（默认折叠，点「?」查看）----------
+// ---------- 说明文案 ----------
 
 private const val HELP_PAGE =
     "基于 yt-dlp，支持多种站点（X、Facebook 已实测可用）。\n\n" +
-        "只处理你有权访问的公开内容；媒体地址有时效性，下载后请尽快处理。"
+        "只处理你有权访问的公开内容；媒体地址有时效性，下载后请尽快处理。\n\n" +
+        "页面只保留一个主按钮：有残留时显示「继续下载」，失败时显示「重试下载」。"
 
 private const val HELP_URL =
     "· 可直接粘贴 App 的分享文本，会自动去掉链接以外的文字；在浏览器/微信里" +
         "「分享文本」到本 App 也可以直接填入。\n\n" +
         "· 目前不支持下载前获取清晰度列表，按默认最优格式下载；时长与分辨率在下载完成后本地读取。\n\n" +
         "· 「取消」为放弃等待，后台任务可能仍会跑完。\n\n" +
-        "· 网络波动导致的失败会自动续传重试两次；也可随时手动点「继续下载」接着下。\n\n" +
-        "· 下载期间可放心切到后台（已用前台服务保活）；完成后是否提醒见下方「通知提醒」。\n\n" +
+        "· 网络波动导致的失败会自动续传重试两次；格式不可用会自动换兼容格式重试一次。\n\n" +
+        "· 下载期间可放心切到后台（已用前台服务保活）。\n\n" +
         "· YouTube 链接会返回 403（当前解析库限制）；X 与 Facebook 已实测可用。"
 
 private const val HELP_COOKIE =
     "用途：小红书、微博等站点需要登录态才能访问（否则会跳转登录页导致失败）。\n\n" +
-        "用法：用浏览器扩展（如 Get cookies.txt LOCALLY）导出 Netscape 格式的 cookies.txt 后在此导入。" +
-        "本 App 会从文件内容自动识别站点，**按平台分别保存**，导入一次即可长期使用。\n\n" +
+        "用法一（推荐，不需要电脑）：在「Cookie 与登录」里点「在 App 内登录」→ 正常登录 → " +
+        "点「完成并导入」。App 会自动把登录 Cookie 转成标准格式并**按站点分别保存**；" +
+        "下载失败需要登录时，错误下方也会直接出现这个入口。\n\n" +
+        "用法二：用浏览器扩展（如 Get cookies.txt LOCALLY）导出 Netscape 格式的 cookies.txt " +
+        "后在此导入，本 App 会从文件内容自动识别站点。\n\n" +
         "下载时只发送与当前链接**同站点**的那份 Cookie：下 X 视频不会带上小红书 Cookie，" +
-        "反之亦然；也可以用上方开关整体关闭。\n\n" +
-        "隐私：文件仅保存在应用私有目录，不写入日志、不外传；用完可在列表里单独清除。"
+        "反之亦然；也可以用开关整体关闭。\n\n" +
+        "注意：登录页走 Android 系统网络栈，如需代理请在系统层使用 VPN 全局模式；" +
+        "验证码、短信验证需本人完成。\n\n" +
+        "隐私：Cookie 仅保存在应用私有目录，不写入日志、不外传；用完可在列表里单独清除，" +
+        "登录页里也有「清除网页登录态」用于换账号。"
 
 private const val HELP_NOTIFY =
     "关闭通知不影响下载。\n\n" +
         "下载进行中的进度通知由系统对前台服务强制要求（正是它保证切后台不被中断），无法单独关闭。\n\n" +
         "若想完全不显示通知，可在系统设置里关闭本应用的通知权限——此时下载仍会正常进行。"
 
-private const val HELP_PROXY =
-    "为什么需要单独填：yt-dlp 运行在**内嵌 Python** 里，它只从环境变量读代理，" +
-        "**不读 Android 系统的 Wi-Fi 代理设置**——所以只在 Wi-Fi 里配代理，对下载是无效的。\n\n" +
-        "两条可行路线：\n" +
-        "· 用 VPN 类应用（全局接管流量）→ 这里留空即可；\n" +
-        "· 用局域网代理（如电脑上的 7890 端口）→ 在这里填地址，会作为 --proxy 传给 yt-dlp。\n\n" +
-        "支持 http://主机:端口、socks5://主机:端口；只填 主机:端口 会自动补 http://。留空 = 不使用代理。"
+private data class LoginTarget(
+    val entryUrl: String,
+    val platform: String,
+    val fallbackUrl: String,
+)
 
-/**
- * Cookie 匹配状态文案。
- *
- * 必须让用户清楚"这一次到底会不会带 Cookie、带的是哪个平台的"——
- * 因为 cookie 现在按平台分开存，自动匹配；匹配不到就不带（不会退而求其次拿别的站点的）。
- */
+/** 让用户清楚「这一次到底会不会带 Cookie、带的是哪个平台的」 */
 private fun cookieMatchText(
     useCookie: Boolean,
     hasUrl: Boolean,
@@ -824,31 +732,9 @@ private fun cookieMatchText(
     else -> "输入链接后自动匹配站点"
 }
 
-/**
- * 通知状态文案：必须分清"App 内偏好"与"系统权限"两层，否则用户会以为开关失灵。
- * （开关打开但系统权限被拒时，通知实际发不出来，必须明确告知。）
- */
+/** 通知状态文案：分清「App 内偏好」与「系统权限」两层 */
 private fun notifyStatusText(resultNotify: Boolean, permissionGranted: Boolean): String = when {
     !resultNotify -> "已关闭（不影响下载）"
     permissionGranted -> "已开启"
     else -> "系统通知权限未授予，通知不会显示"
-}
-
-/** 卡片标题 + 「复制」按钮（日志/诊断信息用） */
-@Composable
-private fun SectionHeaderWithCopy(
-    title: String,
-    textToCopy: String,
-    onCopy: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        TextButton(onClick = onCopy, enabled = textToCopy.isNotBlank()) {
-            Text("复制")
-        }
-    }
 }
