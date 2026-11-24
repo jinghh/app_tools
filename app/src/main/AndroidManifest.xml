@@ -59,6 +59,19 @@
             </intent-filter>
         </activity>
 
+        <!-- 爆款标题页：底部导航可直接进入，也可由下载/GIF 结果卡片带素材进入。
+             configChanges 避免旋转重建导致已生成的标题和抽帧结果丢失（与登录页同一策略）。 -->
+        <activity
+            android:name=".title.ui.TitleActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+
+        <!-- 极简模型配置页：用户自填 Key，Keystore 加密保存 -->
+        <activity
+            android:name=".ai.ui.AiSettingsActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+
         <!--
           应用内登录页：WebView 登录目标站点后自动导出 Cookie，不对外暴露。
           configChanges 避免横竖屏切换重建 Activity —— 重建会重新 loadUrl、

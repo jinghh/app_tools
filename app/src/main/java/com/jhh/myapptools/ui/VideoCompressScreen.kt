@@ -467,9 +467,7 @@ fun VideoCompressScreen(
                         OutlinedButton(
                             onClick = {
                                 pendingSave = r
-                                saveVideoLauncher.launch(
-                                    "compressed_${System.currentTimeMillis()}.mp4"
-                                )
+                                saveVideoLauncher.launch(r.file.name)
                             },
                             modifier = Modifier.weight(1f),
                         ) { Text("另存为", maxLines = 1) }

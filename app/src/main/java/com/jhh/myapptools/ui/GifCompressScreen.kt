@@ -458,7 +458,7 @@ fun GifCompressScreen(
                             OutlinedButton(
                                 onClick = {
                                     pendingSave = r
-                                    saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
+                                    saveGifLauncher.launch(r.file.name)
                                 },
                                 modifier = Modifier.weight(1f),
                             ) { Text("另存为", maxLines = 1) }
@@ -466,7 +466,7 @@ fun GifCompressScreen(
                             Button(
                                 onClick = {
                                     pendingSave = r
-                                    saveGifLauncher.launch("compressed_${System.currentTimeMillis()}.gif")
+                                    saveGifLauncher.launch(r.file.name)
                                 },
                                 modifier = Modifier.weight(1f),
                             ) { Text("保存 GIF", maxLines = 1) }

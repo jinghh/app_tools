@@ -1,5 +1,6 @@
 package com.jhh.myapptools.gif
 
+import com.jhh.myapptools.util.safeBaseName
 import java.io.File
 
 /**
@@ -58,7 +59,7 @@ class GifCompressor {
         for ((index, attempt) in ladder.withIndex()) {
             val round = index + 1
             // 每轮独立产物文件，便于清理中间结果且不误用上一轮内容
-            val roundFile = File(outDir, "round_$round.gif")
+            val roundFile = File(outDir, "${safeBaseName(input.name)}_r$round.gif")
 
             onEvent(GifCompressEvent.RoundStart(round, ladder.size, attempt.label))
 

@@ -80,6 +80,8 @@ fun DownloadScreen(
     onSendToGif: (File) -> Unit = {},
     /** 下载完成后直接交给「视频压缩」页（免去手动保存再导入） */
     onSendToCompress: (File) -> Unit = {},
+    /** 下载结果 → 独立的「爆款标题」页 */
+    onGenerateTitle: (File) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -489,6 +491,10 @@ fun DownloadScreen(
                             modifier = Modifier.weight(1f),
                         ) { Text("另存为", maxLines = 1) }
                     }
+                    OutlinedButton(
+                        onClick = { onGenerateTitle(file) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("生成爆款标题", maxLines = 1) }
                 }
 
                 Text(

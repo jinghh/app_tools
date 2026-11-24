@@ -8,7 +8,7 @@ import java.io.File
  * 工具产物的存储统计与一键清理。
  *
  * 管理范围：下载工作目录（含 .part 残留）、下载成品长期目录、转 GIF 产物、
- * SAF 导入的临时副本（含其下的 compress-out 压缩中间产物）。
+ * SAF 导入的临时副本（含其下的 compress-out 压缩中间产物）、AI 抽帧缓存。
  *
  * 「保留最近结果」的语义：每个目录只保留最新修改的一个文件——即最近一次下载/转换的产物，
  * 其余全部删除。**下载进行中不可调用**（会把正在写入的 .part 当普通文件清掉），
@@ -24,6 +24,8 @@ internal object AppStorage {
         File(context.cacheDir, "gif-input"),   // SAF 导入的 GIF 副本（含 compress-out）
         File(context.cacheDir, "image-input"), // SAF 导入的图片副本
         File(context.cacheDir, "image-output"),// 图片压缩产物（按批次子目录组织）
+        File(context.cacheDir, "title-frames"), // AI 抽帧产物（按批次子目录组织）
+        File(context.cacheDir, "title-input"),  // AI 取标题页自选资源的副本
     )
 
     fun totalBytes(context: Context): Long =
@@ -35,7 +37,10 @@ internal object AppStorage {
     fun clean(context: Context): Long {
         var freed = 0L
         managedDirs(context).forEach { dir ->
-            freed += if (dir.name == IMAGE_OUTPUT_DIR) cleanBatchDir(dir) else cleanFlatDir(dir)
+            freed += when (dir.name) {
+                IMAGE_OUTPUT_DIR, TITLE_FRAMES_DIR -> cleanBatchDir(dir)
+                else -> cleanFlatDir(dir)
+            }
         }
         return freed
     }
@@ -87,4 +92,5 @@ internal object AppStorage {
     }
 
     private const val IMAGE_OUTPUT_DIR = "image-output"
+    private const val TITLE_FRAMES_DIR = "title-frames"
 }

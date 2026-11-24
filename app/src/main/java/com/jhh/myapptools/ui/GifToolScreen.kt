@@ -21,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.jhh.myapptools.gif.FfmpegGifEngine
 import com.jhh.myapptools.gif.GifToolPrefs
 import com.jhh.myapptools.util.formatBytes
+import com.jhh.myapptools.util.safeBaseName
 import com.jhh.myapptools.gif.GifEncodeEvent
 import com.jhh.myapptools.gif.GifEncodeParams
 import com.jhh.myapptools.gif.GifEncodeResult
@@ -68,6 +70,8 @@ fun GifToolScreen(
     onPreloadConsumed: () -> Unit = {},
     /** 把转换结果直传给「GIF 压缩」页（免去手动保存再导入） */
     onSendToCompress: (File) -> Unit = {},
+    /** GIF 结果 → 独立的「爆款标题」页 */
+    onGenerateTitle: (File) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -222,7 +226,8 @@ fun GifToolScreen(
         }
 
         val outDir = File(context.cacheDir, "gif-output").apply { mkdirs() }
-        val outFile = File(outDir, "gif_${System.currentTimeMillis()}.gif")
+        // 产物沿用视频文件名（去掉原扩展名），供后续「爆款标题」页读取原视频标题作为上下文
+        val outFile = uniqueFile(outDir, "${safeBaseName(input.name)}.gif")
         val params = GifEncodeParams(
             startMs = startMs,
             durationMs = durationMs,
@@ -546,7 +551,7 @@ fun GifToolScreen(
                             OutlinedButton(
                                 onClick = {
                                     pendingSave = r
-                                    saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
+                                    saveGifLauncher.launch(r.file.name)
                                 },
                                 modifier = Modifier.weight(1f),
                             ) { Text("另存为", maxLines = 1) }
@@ -554,7 +559,7 @@ fun GifToolScreen(
                             Button(
                                 onClick = {
                                     pendingSave = r
-                                    saveGifLauncher.launch("gif_${System.currentTimeMillis()}.gif")
+                                    saveGifLauncher.launch(r.file.name)
                                 },
                                 modifier = Modifier.weight(1f),
                             ) { Text("保存 GIF", maxLines = 1) }
@@ -564,6 +569,10 @@ fun GifToolScreen(
                         onClick = { onSendToCompress(r.file) },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("压缩") }
+                    FilledTonalButton(
+                        onClick = { onGenerateTitle(r.file) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("生成爆款标题", maxLines = 1) }
                 }
             }
         }

@@ -2,6 +2,7 @@ package com.jhh.myapptools.video
 
 import com.jhh.myapptools.gif.FfmpegRunner
 import com.jhh.myapptools.media.VideoMetadata
+import com.jhh.myapptools.util.safeBaseName
 import java.io.File
 
 /**
@@ -62,7 +63,7 @@ class VideoCompressor {
 
         for ((index, attempt) in ladder.withIndex()) {
             val round = index + 1
-            val roundFile = File(outDir, "round_$round.mp4")
+            val roundFile = File(outDir, "${safeBaseName(input.name)}_r$round.mp4")
 
             onEvent(VideoCompressEvent.RoundStart(round, ladder.size, attempt.label))
 

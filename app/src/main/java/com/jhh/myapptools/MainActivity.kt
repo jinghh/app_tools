@@ -12,9 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,9 +33,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import com.jhh.myapptools.ai.ui.AiSettingsActivity
 import com.jhh.myapptools.download.UrlExtractor
+import com.jhh.myapptools.title.ui.TitleActivity
+import com.jhh.myapptools.title.ui.TitleScreen
 import com.jhh.myapptools.ui.DownloadScreen
 import com.jhh.myapptools.ui.GifCompressScreen
+import com.jhh.myapptools.ui.MoreScreen
 import com.jhh.myapptools.ui.GifToolScreen
 import com.jhh.myapptools.ui.ImageCompressScreen
 import com.jhh.myapptools.ui.VideoCompressScreen
@@ -104,14 +106,18 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_TAB = "extra_tab"
         /**
-         * 页签按使用频率排序：X 下载（最常用，默认页）→ 视频转 GIF → GIF 压缩 → 视频压缩 → 图片压缩。
-         * 已是 Material3 NavigationBar 的 5 项上限，再加功能需要改导航结构（抽屉或聚合页）。
+         * 主导航只放高频入口：下载 → 转 GIF → 爆款标题 → 更多。
+         * 低频工具和后续新功能放进「更多」聚合页，不再受 NavigationBar 5 项上限约束。
+         * TAB_DOWNLOAD 保持 0：通知/剪贴板入口依赖这个值。
          */
         const val TAB_DOWNLOAD = 0
         const val TAB_GIF = 1
-        const val TAB_COMPRESS = 2
-        const val TAB_VIDEO_COMPRESS = 3
-        const val TAB_IMAGE_COMPRESS = 4
+        const val TAB_TITLE = 2
+        const val TAB_MORE = 3
+        // 「更多」页里跳转的工具页，仍使用独立编号
+        const val TAB_COMPRESS = 4
+        const val TAB_VIDEO_COMPRESS = 5
+        const val TAB_IMAGE_COMPRESS = 6
     }
 }
 
@@ -216,29 +222,26 @@ private fun MainScreen(
                     label = { Text("转 GIF") },
                 )
                 NavigationBarItem(
-                    selected = tab == MainActivity.TAB_COMPRESS,
-                    onClick = { tab = MainActivity.TAB_COMPRESS },
-                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                    label = { Text("GIF 压缩") },
-                )
-                NavigationBarItem(
-                    selected = tab == MainActivity.TAB_VIDEO_COMPRESS,
-                    onClick = { tab = MainActivity.TAB_VIDEO_COMPRESS },
-                    icon = { Icon(Icons.Filled.Build, contentDescription = null) },
-                    label = { Text("视频压缩", maxLines = 1) },
-                )
-                NavigationBarItem(
-                    selected = tab == MainActivity.TAB_IMAGE_COMPRESS,
-                    onClick = { tab = MainActivity.TAB_IMAGE_COMPRESS },
-                    // material-icons-core 不含 Image 图标，用自绘 vector，避免引入
-                    // material-icons-extended（数千个图标，APK 显著变大）
+                    selected = tab == MainActivity.TAB_TITLE,
+                    onClick = { tab = MainActivity.TAB_TITLE },
                     icon = {
                         Icon(
-                            painter = painterResource(R.drawable.ic_tab_image),
+                            painter = painterResource(R.drawable.ic_tab_title),
                             contentDescription = null,
                         )
                     },
-                    label = { Text("图片", maxLines = 1) },
+                    label = { Text("爆款标题", maxLines = 1) },
+                )
+                NavigationBarItem(
+                    selected = tab == MainActivity.TAB_MORE || tab >= MainActivity.TAB_COMPRESS,
+                    onClick = { tab = MainActivity.TAB_MORE },
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_tab_more),
+                            contentDescription = null,
+                        )
+                    },
+                    label = { Text("更多") },
                 )
             }
         },
@@ -258,6 +261,7 @@ private fun MainScreen(
                     pendingCompressVideo = file
                     tab = MainActivity.TAB_VIDEO_COMPRESS
                 },
+                onGenerateTitle = { file -> TitleActivity.start(context, file) },
             )
 
             MainActivity.TAB_GIF -> GifToolScreen(
@@ -267,6 +271,22 @@ private fun MainScreen(
                 onSendToCompress = { file ->
                     pendingGif = file
                     tab = MainActivity.TAB_COMPRESS
+                },
+                onGenerateTitle = { file -> TitleActivity.start(context, file) },
+            )
+
+            MainActivity.TAB_TITLE -> TitleScreen(
+                modifier = Modifier.padding(padding),
+                onOpenSettings = {
+                    context.startActivity(Intent(context, AiSettingsActivity::class.java))
+                },
+            )
+
+            MainActivity.TAB_MORE -> MoreScreen(
+                modifier = Modifier.padding(padding),
+                onOpenTab = { target -> tab = target },
+                onOpenSettings = {
+                    context.startActivity(Intent(context, AiSettingsActivity::class.java))
                 },
             )
 
