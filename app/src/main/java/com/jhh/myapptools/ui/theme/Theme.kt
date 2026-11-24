@@ -6,7 +6,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 
 /**
  * 应用主题。
@@ -34,9 +36,29 @@ fun AppTheme(
         else -> LightColors
     }
 
+    // AppTypography 里的 TextStyle 没有设 color，Compose 会回退到 Color.Unspecified（黑色），
+    // 导致深色主题下标题/正文全黑。这里按当前 colorScheme 统一注入 onSurface，
+    // 所有 Text 自动跟随主题；个别需要弱化/强调的地方仍可在调用点显式覆盖 color。
+    val themedTypography = AppTypography.copy(
+        headlineLarge = AppTypography.headlineLarge.withColor(colorScheme.onSurface),
+        headlineMedium = AppTypography.headlineMedium.withColor(colorScheme.onSurface),
+        headlineSmall = AppTypography.headlineSmall.withColor(colorScheme.onSurface),
+        titleLarge = AppTypography.titleLarge.withColor(colorScheme.onSurface),
+        titleMedium = AppTypography.titleMedium.withColor(colorScheme.onSurface),
+        titleSmall = AppTypography.titleSmall.withColor(colorScheme.onSurface),
+        bodyLarge = AppTypography.bodyLarge.withColor(colorScheme.onSurface),
+        bodyMedium = AppTypography.bodyMedium.withColor(colorScheme.onSurface),
+        bodySmall = AppTypography.bodySmall.withColor(colorScheme.onSurface),
+        labelLarge = AppTypography.labelLarge.withColor(colorScheme.onSurface),
+        labelMedium = AppTypography.labelMedium.withColor(colorScheme.onSurface),
+        labelSmall = AppTypography.labelSmall.withColor(colorScheme.onSurface),
+    )
+
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = AppTypography,
+        typography = themedTypography,
         content = content,
     )
 }
+
+private fun TextStyle.withColor(color: Color): TextStyle = copy(color = color)

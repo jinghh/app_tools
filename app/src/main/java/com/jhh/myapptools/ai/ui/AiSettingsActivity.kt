@@ -6,9 +6,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -53,24 +56,34 @@ class AiSettingsActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             AppTheme {
-                AiSettingsScreen(
-                    initial = initial,
-                    onSave = { config ->
-                        runCatching { store.save(config) }
-                            .onSuccess {
-                                Toast.makeText(this, "已保存模型配置", Toast.LENGTH_SHORT).show()
-                                finish()
-                            }
-                            .onFailure { e ->
-                                Toast.makeText(
-                                    this,
-                                    "保存失败（Key 不会明文保存）：${e.message ?: "设备不支持安全存储"}",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
-                    },
-                    onBack = { finish() },
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding(),
+                ) {
+                    AiSettingsScreen(
+                        initial = initial,
+                        onSave = { config ->
+                            runCatching { store.save(config) }
+                                .onSuccess {
+                                    Toast.makeText(
+                                        this@AiSettingsActivity,
+                                        "已保存模型配置",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    finish()
+                                }
+                                .onFailure { e ->
+                                    Toast.makeText(
+                                        this@AiSettingsActivity,
+                                        "保存失败（Key 不会明文保存）：${e.message ?: "设备不支持安全存储"}",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                        },
+                        onBack = { finish() },
+                    )
+                }
             }
         }
     }
@@ -123,7 +136,7 @@ private fun AiSettingsScreen(
 
     ScreenScaffold(
         title = "模型设置",
-        titleExtra = { androidx.compose.material3.TextButton(onClick = onBack) { Text("返回") } },
+        onBack = onBack,
     ) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(

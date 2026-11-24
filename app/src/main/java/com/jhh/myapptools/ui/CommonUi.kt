@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
@@ -38,15 +39,54 @@ import com.jhh.myapptools.R
 import java.util.Locale
 
 /**
- * 页面骨架：标题 + 可滚动内容。
+ * 公共页头：左侧返回箭头 + 标题 + 右侧操作区。
  *
- * 5 个工具页共用同一套结构，避免各自实现导致行为不一致。
+ * 所有**不在底部导航栏里**的页面（独立 Activity）都必须传 [onBack]，
+ * 保证返回入口的位置和行为一致；底部导航页传 null，不显示箭头。
+ */
+@Composable
+internal fun PageHeader(
+    title: String,
+    onBack: (() -> Unit)? = null,
+    actions: (@Composable () -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "返回",
+                    // 显式 tint：深色主题下 onSurface 是浅色，避免继承到默认黑色
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineSmall,
+            maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+        actions?.invoke()
+    }
+}
+
+/**
+ * 页面骨架：页头 + 可滚动内容。
+ *
+ * 工具页共用同一套结构，避免各自实现导致行为不一致。
  * 操作按钮一律放在内容流里（不放悬浮底栏），避免遮挡内容、也不误触。
  */
 @Composable
 internal fun ScreenScaffold(
     modifier: Modifier = Modifier,
     title: String,
+    /** 独立页面传返回回调，页头左侧显示返回箭头；底部导航页留空 */
+    onBack: (() -> Unit)? = null,
     /** 标题右侧的附加元素（如「?」帮助图标） */
     titleExtra: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -58,13 +98,7 @@ internal fun ScreenScaffold(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
-            titleExtra?.invoke()
-        }
+        PageHeader(title = title, onBack = onBack, actions = titleExtra)
         content()
     }
 }

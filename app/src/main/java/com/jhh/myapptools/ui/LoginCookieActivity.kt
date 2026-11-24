@@ -200,52 +200,45 @@ private fun LoginCookieScreen(
     ) {
         var menuExpanded by remember { mutableStateOf(false) }
 
-        // 顶部只保留「取消 / 标题 / 更多」；主操作固定到底部，WebView 滚动时也够得着
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onCancel, enabled = !busy) { Text("取消") }
-            Text(
-                "登录 $displayName",
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
-            Box {
-                IconButton(onClick = { menuExpanded = true }, enabled = !busy) {
-                    Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "更多",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        // 公共页头：返回箭头 + 标题 + 右侧「更多」；主操作固定到底部，WebView 滚动时也够得着
+        PageHeader(
+            title = "登录 $displayName",
+            onBack = { if (!busy) onCancel() },
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            actions = {
+                Box {
+                    IconButton(onClick = { menuExpanded = true }, enabled = !busy) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "更多",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("清除网页登录态（换账号）") },
+                            onClick = {
+                                menuExpanded = false
+                                // 全局清理：不影响已保存给下载用的 cookies.txt 文件
+                                CookieManager.getInstance()?.apply {
+                                    removeAllCookies(null)
+                                    flush()
+                                }
+                                Toast.makeText(
+                                    context,
+                                    "已清除 App 内网页登录态，请重新进入登录页",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                onCancel()
+                            },
+                        )
+                    }
                 }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("清除网页登录态（换账号）") },
-                        onClick = {
-                            menuExpanded = false
-                            // 全局清理：不影响已保存给下载用的 cookies.txt 文件
-                            CookieManager.getInstance()?.apply {
-                                removeAllCookies(null)
-                                flush()
-                            }
-                            Toast.makeText(
-                                context,
-                                "已清除 App 内网页登录态，请重新进入登录页",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                            onCancel()
-                        },
-                    )
-                }
-            }
-        }
+            },
+        )
 
         errorText?.let { msg ->
             Text(

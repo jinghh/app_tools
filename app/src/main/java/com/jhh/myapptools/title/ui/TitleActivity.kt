@@ -15,6 +15,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -90,11 +93,19 @@ class TitleActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             AppTheme {
-                TitleScreen(
-                    initialSource = source,
-                    onBack = { finish() },
-                    onOpenSettings = { startActivity(Intent(this, AiSettingsActivity::class.java)) },
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding(),
+                ) {
+                    TitleScreen(
+                        initialSource = source,
+                        onBack = { finish() },
+                        onOpenSettings = {
+                            startActivity(Intent(this@TitleActivity, AiSettingsActivity::class.java))
+                        },
+                    )
+                }
             }
         }
     }
@@ -301,8 +312,8 @@ internal fun TitleScreen(
     ScreenScaffold(
         modifier = modifier,
         title = "爆款标题",
+        onBack = onBack,
         titleExtra = {
-            if (onBack != null) TextButton(onClick = onBack) { Text("返回") }
             TextButton(onClick = onOpenSettings) { Text("模型设置") }
         },
     ) {
