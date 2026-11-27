@@ -8,7 +8,9 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -311,8 +313,9 @@ fun GifToolScreen(
 
     // ---------- UI ----------
 
+    var fullScreenGif by remember { mutableStateOf<File?>(null) }
+    Box(modifier = modifier.fillMaxSize()) {
     ScreenScaffold(
-        modifier = modifier,
         title = "视频转 GIF",
         titleExtra = {
             HelpIcon(
@@ -537,7 +540,13 @@ fun GifToolScreen(
                             .fillMaxWidth()
                             .height(200.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { fullScreenGif = r.file },
+                    )
+                    Text(
+                        "点击预览可全屏查看（GIF 会继续播放）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -602,6 +611,10 @@ fun GifToolScreen(
             blocks = diagBlocks,
             summary = "命令 / 诊断 / 日志，共 ${diagBlocks.size} 项",
         )
+    }
+    fullScreenGif?.let { file ->
+        FullScreenViewer(file = file, isGif = true) { fullScreenGif = null }
+    }
     }
 }
 

@@ -14,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,9 +60,12 @@ import com.jhh.myapptools.ai.ui.AiSettingsActivity
 import com.jhh.myapptools.title.ExtractedFrames
 import com.jhh.myapptools.title.FrameExtractor
 import com.jhh.myapptools.title.GenerateOutcome
+import com.jhh.myapptools.title.PromptDefaults
+import com.jhh.myapptools.title.PromptStore
 import com.jhh.myapptools.title.TitleBatch
 import com.jhh.myapptools.title.TitleGenerator
 import com.jhh.myapptools.title.TitleParams
+import com.jhh.myapptools.ui.FullScreenViewer
 import com.jhh.myapptools.ui.ScreenScaffold
 import com.jhh.myapptools.ui.copyUriToCache
 import com.jhh.myapptools.ui.queryDisplayName
@@ -129,7 +133,9 @@ class TitleActivity : ComponentActivity() {
 private class TitleDependencies(context: Context) {
     val extractor = FrameExtractor(context)
     val client = AiChatClient()
-    val generator = TitleGenerator(client)
+    val promptStore = PromptStore(context)
+    // 每次生成时读一次模板：保存后无需重建 generator，下一次生成立即生效
+    val generator = TitleGenerator(client, templateProvider = { promptStore.load() })
     val configStore = AiConfigStore(context)
 }
 
@@ -155,6 +161,10 @@ internal fun TitleScreen(
     }
     var minChars by rememberSaveable { mutableIntStateOf(30) }
     var maxChars by rememberSaveable { mutableIntStateOf(100) }
+    var promptExpanded by remember { mutableStateOf(false) }
+    var promptDraft by remember { mutableStateOf(deps.promptStore.load()) }
+    var promptCustomized by remember { mutableStateOf(deps.promptStore.isCustomized()) }
+    var fullScreenFrame by remember { mutableStateOf<File?>(null) }
     var batch by remember { mutableStateOf<TitleBatch?>(null) }
     var status by remember { mutableStateOf("") }
     var progress by remember { mutableStateOf(0f) }
@@ -309,8 +319,8 @@ internal fun TitleScreen(
         if (source != null) runExtract()
     }
 
+    Box(modifier = modifier.fillMaxSize()) {
     ScreenScaffold(
-        modifier = modifier,
         title = "爆款标题",
         onBack = onBack,
         titleExtra = {
@@ -364,7 +374,9 @@ internal fun TitleScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            frames.forEach { FrameThumbnail(it) }
+                            frames.forEach { f ->
+                                FrameThumbnail(f) { fullScreenFrame = f }
+                            }
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -444,6 +456,66 @@ internal fun TitleScreen(
                 }
             }
 
+            // 提示词设置：默认收起（非高频），点击展开页内编辑，避免弹窗里编辑长文本体验差
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TextButton(
+                        onClick = {
+                            if (!promptExpanded) promptDraft = deps.promptStore.load()
+                            promptExpanded = !promptExpanded
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "提示词设置（${if (promptCustomized) "已自定义" else "默认"}）" +
+                                if (promptExpanded) "  ▲" else "  ▼",
+                        )
+                    }
+                    if (promptExpanded) {
+                        Text(
+                            "可修改文案与示例；{{...}} 为动态变量，生成时会自动替换，请勿删除。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            value = promptDraft,
+                            onValueChange = { promptDraft = it },
+                            label = { Text("提示词模板") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 8,
+                            maxLines = 20,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    promptDraft = PromptDefaults.TEMPLATE
+                                    deps.promptStore.reset()
+                                    promptCustomized = false
+                                    Toast.makeText(context, "已恢复默认提示词", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("恢复默认", maxLines = 1) }
+                            Button(
+                                onClick = {
+                                    if (promptDraft.isBlank()) {
+                                        errorText = "提示词不能为空"
+                                        return@Button
+                                    }
+                                    deps.promptStore.save(promptDraft)
+                                    promptCustomized = true
+                                    promptExpanded = false
+                                    Toast.makeText(context, "提示词已保存", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("保存", maxLines = 1) }
+                        }
+                    }
+                }
+            }
+
             errorText?.let { Text("错误：$it", color = MaterialTheme.colorScheme.error) }
 
             batch?.let { current ->
@@ -474,10 +546,14 @@ internal fun TitleScreen(
             }
         }
     }
+    fullScreenFrame?.let { file ->
+        FullScreenViewer(file = file, isGif = false) { fullScreenFrame = null }
+    }
+    }
 }
 
 @Composable
-private fun FrameThumbnail(file: File) {
+private fun FrameThumbnail(file: File, onClick: () -> Unit) {
     // inSampleSize=2：640px 缩到 320px 用于 80dp 预览，避免 8 张大图常驻内存
     val bitmap = remember(file.path) {
         runCatching {
@@ -491,7 +567,8 @@ private fun FrameThumbnail(file: File) {
             contentDescription = "关键帧",
             modifier = Modifier
                 .size(80.dp)
-                .clip(RoundedCornerShape(6.dp)),
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onClick),
         )
     }
 }
